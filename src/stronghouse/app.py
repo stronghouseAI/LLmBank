@@ -77,6 +77,18 @@ def build_services(settings: Settings) -> Services:
     )
 
 
+class UiFiles(StaticFiles):
+    """The web UI, always revalidated so a `git pull` shows up on the next page load.
+
+    Without this, browsers may keep using an old app.js for a while after an update.
+    """
+
+    async def get_response(self, path: str, scope):  # type: ignore[no-untyped-def]
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 def create_app(services: Services) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -89,5 +101,5 @@ def create_app(services: Services) -> FastAPI:
     app.include_router(router)
     app.include_router(agent_router)
     static_dir = resources.files("stronghouse.ui") / "static"
-    app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="ui")
+    app.mount("/", UiFiles(directory=str(static_dir), html=True), name="ui")
     return app
