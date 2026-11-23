@@ -235,3 +235,23 @@ def test_search_failure_names_the_reason():
     skills = SkillExecutor(lambda *_: None, http=http)
     with pytest.raises(SkillError, match="answered 403"):
         skills.execute(1, "web_search", {"query": "guardian"})
+
+
+def picky_web(request: httpx.Request) -> httpx.Response:
+    """Like the Guardian on phil's laptop: refuses one kind of User-Agent."""
+    agent = request.headers["user-agent"]
+    if request.url.host == "honest.test" and "Firefox" in agent:
+        return httpx.Response(403)
+    if request.url.host == "browsers-only.test" and "Firefox" not in agent:
+        return httpx.Response(403)
+    return httpx.Response(200, text=RSS, headers={"content-type": "application/rss+xml"})
+
+
+def test_honest_name_first_then_browser_headers_after_a_refusal():
+    http = httpx.Client(
+        transport=httpx.MockTransport(picky_web), headers={"User-Agent": "StronghouseAI/0.1"}
+    )
+    skills = SkillExecutor(lambda *_: None, http=http)
+    for site in ("honest.test", "browsers-only.test"):
+        feed = skills.execute(1, "read_news_feed", {"url": f"https://{site}/rss"})
+        assert "Storm hits coast" in feed
