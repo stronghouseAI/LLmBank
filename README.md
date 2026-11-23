@@ -27,6 +27,31 @@ Inference itself is done by [llama.cpp](https://github.com/ggml-org/llama.cpp)'s
 - **Guild (Agent shop)**: build your own agents from the bottom up. Give each one a name, portrait, a job and personality, any of the 15 skills it needs (files, web and news, PDFs, desktop, calculator and clock), and Creativity and Diligence stats. Send them on quests using the loaded model. Every action on your computer (reading, writing, searching files, running commands, going online) waits for your **Allow once** or **Deny**. Pair an agent with a reviewer for a team of two. Agents keep a journal between quests and can be exported and imported as `.agent.json` cards. See `docs/adr/0006-skill-library.md` and `0007-agents-built-from-skills.md`. PDF reading needs `poppler` and clipboard copy needs `wl-clipboard` (both one `pacman -S` away).
 - **System**: GPU, RAM, CPU and engine version.
 
+## Terminal version (`shai`)
+
+Everything also works from the terminal. The first command starts the app in the
+background if it is not already running, so the web UI and the terminal share
+the same loaded model.
+
+```bash
+shai vault ls                          # models on your disk
+shai vault load qwen3-8b               # Auto-fit and load (by id or part of the name)
+shai vault load deepseek --ctx 16384 --kv q8_0 --n-cpu-moe 10
+shai chat                              # talk to it; --no-think for quick answers
+shai ask "What is 17 times 23?"
+shai discover qwen3 --max-gb 8 --moe   # Hugging Face search with filters
+shai files Qwen/Qwen3-8B-GGUF          # which files fit your computer
+shai get Qwen/Qwen3-8B-GGUF Qwen3-8B-Q4_K_M.gguf
+shai agents                            # your Guild
+shai quest Newsie "UK headlines into ~/Documents/news.md"   # y/n for every action
+shai status                            # engine, model, GPU and memory
+shai unload / shai stop                # free the GPU / stop the background app
+```
+
+Run `shai --help` or `shai <command> --help` for every option. Inside the repo use
+`uv run shai ...`; to have `shai` everywhere, install it once with
+`uv tool install --editable .` from the repo folder.
+
 ## Install (Arch / Omarchy)
 
 ```bash

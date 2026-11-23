@@ -13,6 +13,7 @@ dependencies = [
 
 [project.scripts]
 stronghouse = "stronghouse.__main__:main"
+shai = "stronghouse.cli.commands:main"
 
 [dependency-groups]
 dev = [
