@@ -135,3 +135,5 @@ input[type="range"], input[type="checkbox"] { padding: 0; accent-color: var(--ac
   background: var(--surface-2); padding: .5rem; border-radius: 6px; }
 dialog { color: var(--text); max-width: 560px; width: 92vw; }
 dialog::backdrop { background: rgb(0 0 0 / .5); }
+.skill-category { grid-column: 1 / -1; margin-top: .4rem; font-size: .8rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
