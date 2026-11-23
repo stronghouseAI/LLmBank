@@ -20,7 +20,9 @@ from stronghouse.core.text_extract import (
 from stronghouse.services.skills.common import SkillError
 
 MAX_DOWNLOAD_BYTES = 3 * 1024 * 1024
-SEARCH_URL = "https://html.duckduckgo.com/html/"
+# DuckDuckGo's two no-JavaScript pages. The second is tried when the first refuses
+# or answers with a "too many requests" page instead of results.
+SEARCH_URLS = ("https://html.duckduckgo.com/html/", "https://lite.duckduckgo.com/lite/")
 _FEED_TYPES = ("rss", "atom", "xml")
 
 
@@ -46,16 +48,29 @@ class WebSkills:
         query = str(args["query"]).strip()
         if not query:
             raise SkillError("The search is empty.")
-        try:
-            response = self._http.post(SEARCH_URL, data={"q": query})
-            response.raise_for_status()
-        except httpx.HTTPError as error:
-            raise SkillError(f"The web search failed: {error}") from error
-        return format_search_results(parse_search_results(response.text))
+        problem = "no results"
+        for url in SEARCH_URLS:
+            try:
+                response = self._http.post(url, data={"q": query})
+            except httpx.HTTPError as error:
+                problem = str(error)
+                continue
+            if response.status_code != 200:
+                problem = f"the search site answered {response.status_code}"
+                continue
+            results = parse_search_results(response.text)
+            if results:
+                return format_search_results(results)
+        raise SkillError(
+            f"The web search failed ({problem}). If you know the site, fetch its page "
+            "or its RSS feed directly instead."
+        )
 
     def _get(self, url: str) -> tuple[str, str]:
         try:
             with self._http.stream("GET", url) as response:
+                if response.status_code in (401, 403, 429):
+                    raise SkillError(_blocked_message(url, response.status_code))
                 response.raise_for_status()
                 chunks, size = [], 0
                 for chunk in response.iter_bytes():
@@ -68,6 +83,15 @@ class WebSkills:
         except httpx.HTTPError as error:
             raise SkillError(f"Could not fetch {url}: {error}") from error
         return b"".join(chunks).decode(encoding, errors="replace"), content_type
+
+
+def _blocked_message(url: str, status: int) -> str:
+    """Tell the model why, so it can try another route instead of giving up."""
+    return (
+        f"{urlparse(url).netloc} refused the request ({status}). Many sites block "
+        "automated readers. Try the site's RSS feed with read_news_feed (for example "
+        "<site>/rss), or use web_search to find another source."
+    )
 
 
 def _checked_url(raw: object) -> str:

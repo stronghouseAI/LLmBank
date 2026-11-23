@@ -139,7 +139,7 @@ class SearchResult:
 
 
 class _DuckDuckGoParser(HTMLParser):
-    """Reads results from DuckDuckGo's no-JavaScript page (html.duckduckgo.com).
+    """Reads results from DuckDuckGo's no-JavaScript pages (html. and lite.duckduckgo.com).
 
     That page's markup is not a stable API; if DuckDuckGo changes it, this
     parser returns no results instead of crashing (see ADR 0006).
@@ -152,10 +152,10 @@ class _DuckDuckGoParser(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs: list) -> None:
         classes = (dict(attrs).get("class") or "").split()
-        if tag == "a" and "result__a" in classes:
+        if tag == "a" and ("result__a" in classes or "result-link" in classes):
             self.results.append({"title": "", "url": dict(attrs).get("href", ""), "snippet": ""})
             self._field = "title"
-        elif "result__snippet" in classes and self.results:
+        elif ("result__snippet" in classes or "result-snippet" in classes) and self.results:
             self._field = "snippet"
 
     def handle_endtag(self, tag: str) -> None:
