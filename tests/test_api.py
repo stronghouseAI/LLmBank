@@ -116,3 +116,25 @@ def test_unsafe_download_is_rejected(client):
     test_client, _ = client
     response = test_client.post("/api/downloads", json={"repo_id": "../x", "filename": "a.gguf"})
     assert response.status_code == 400
+
+
+def test_agent_shop_endpoints(client):
+    test_client, _ = client
+    catalog = test_client.get("/api/agents/catalog").json()
+    assert catalog["max_skill_slots"] == 5
+    starter = catalog["starters"][0]
+
+    imported = test_client.post("/api/agents/import", json=starter).json()
+    assert imported["name"] == starter["name"] and imported["level"] == 1
+
+    card = test_client.get(f"/api/agents/{imported['id']}/card").json()
+    assert card == starter
+
+    bad = test_client.post(
+        "/api/agents", json={"name": "X", "agent_class": "scout", "skills": ["fly"]}
+    )
+    assert bad.status_code == 400
+
+    quest = test_client.post("/api/quests", json={"task": "hi", "agent_ids": [imported["id"]]})
+    assert quest.status_code == 200
+    assert test_client.post("/api/quests", json={"task": "hi", "agent_ids": []}).status_code == 400

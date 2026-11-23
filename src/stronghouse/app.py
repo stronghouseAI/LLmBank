@@ -15,6 +15,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from stronghouse.api.agent_routes import router as agent_router
 from stronghouse.api.routes import router
 from stronghouse.config import Settings
 from stronghouse.core.launch_args import build_server_args
@@ -24,6 +25,9 @@ from stronghouse.services.engine import EngineController
 from stronghouse.services.hardware_probe import probe_hardware
 from stronghouse.services.huggingface import HuggingFaceClient
 from stronghouse.services.library_indexer import LibraryIndexer
+from stronghouse.services.quest_runner import QuestRunner
+from stronghouse.services.skills import SkillExecutor
+from stronghouse.storage.agent_store import AgentStore
 from stronghouse.storage.library_db import LibraryStore
 
 
@@ -36,6 +40,8 @@ class Services:
     engine: EngineController
     probe_hardware: Callable[[], HardwareProfile]
     settings: Settings
+    agents: AgentStore
+    quests: QuestRunner
 
     def engine_command_preview(self, model_path: Path, plan: LaunchPlan) -> list[str]:
         """The exact llama-server command a plan would run, for display and copy-paste."""
@@ -56,6 +62,8 @@ def build_services(settings: Settings) -> Services:
         log_path=settings.data_dir / "engine.log",
     )
     downloads = DownloadManager(hub, indexer, settings.archive_dir, engine.version)
+    agents = AgentStore(settings.agents_database_path)
+    quests = QuestRunner(agents, engine, SkillExecutor(agents.add_note))
     return Services(
         store=store,
         indexer=indexer,
@@ -64,6 +72,8 @@ def build_services(settings: Settings) -> Services:
         engine=engine,
         probe_hardware=probe_hardware,
         settings=settings,
+        agents=agents,
+        quests=quests,
     )
 
 
@@ -77,6 +87,7 @@ def create_app(services: Services) -> FastAPI:
     app = FastAPI(title="StronghouseAI", version="0.1.0", lifespan=lifespan)
     app.state.services = services
     app.include_router(router)
+    app.include_router(agent_router)
     static_dir = resources.files("stronghouse.ui") / "static"
     app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="ui")
     return app
