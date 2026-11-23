@@ -22,10 +22,7 @@ BROWSER_OPEN_DELAY_SECONDS = 1.5
 
 
 def serve(no_browser: bool = False) -> None:
-    """Run the app (web UI and API) in this process until Ctrl+C."""
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-    )
+    """Run the app (web UI and API) in this process until Ctrl+C, or open the running one."""
     settings = load_settings()
     url = f"http://{settings.host}:{settings.port}"
     if app_is_running(settings):  # e.g. shai started it in the background: reuse it
@@ -33,6 +30,9 @@ def serve(no_browser: bool = False) -> None:
         if not no_browser:
             webbrowser.open(url)
         return
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
     app = create_app(build_services(settings))
 
     if not no_browser:

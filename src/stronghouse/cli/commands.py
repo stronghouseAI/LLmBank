@@ -452,7 +452,12 @@ def build_parser() -> argparse.ArgumentParser:
         ' · shai chat · shai quest Newsie "UK headlines to ~/news.md"',
     )
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
+    for add_section in (_add_vault, _add_discover, _add_chat, _add_guild, _add_system):
+        add_section(commands)
+    return parser
 
+
+def _add_vault(commands: argparse._SubParsersAction) -> None:
     vault = commands.add_parser("vault", help="models on your disk").add_subparsers(
         dest="action", required=True
     )
@@ -478,6 +483,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_plan_flags(commands.choices["load"], with_model=True)
     commands.add_parser("unload", help="same as: vault unload").set_defaults(handler=vault_unload)
 
+
+def _add_discover(commands: argparse._SubParsersAction) -> None:
     disc = commands.add_parser("discover", help="search GGUF models on Hugging Face")
     disc.add_argument("query", nargs="+", help="what to search for, e.g. qwen3 30b")
     disc.add_argument(
@@ -505,6 +512,8 @@ def build_parser() -> argparse.ArgumentParser:
     dl.add_argument("filename")
     dl.set_defaults(handler=get)
 
+
+def _add_chat(commands: argparse._SubParsersAction) -> None:
     for name, handler, text in (
         ("chat", chat, "talk to the loaded model"),
         ("ask", ask, "ask one question"),
@@ -520,6 +529,9 @@ def build_parser() -> argparse.ArgumentParser:
         sub.set_defaults(handler=handler)
 
     commands.add_parser("bench", help="speed test the loaded model").set_defaults(handler=bench)
+
+
+def _add_guild(commands: argparse._SubParsersAction) -> None:
     commands.add_parser("agents", help="list your agents").set_defaults(handler=agents_ls)
     qst = commands.add_parser("quest", help="send an agent on a quest (asks before every action)")
     qst.add_argument("agent", help="agent name or id")
@@ -527,12 +539,13 @@ def build_parser() -> argparse.ArgumentParser:
     qst.add_argument("--reviewer", help="a second agent who checks the work")
     qst.set_defaults(handler=quest)
 
+
+def _add_system(commands: argparse._SubParsersAction) -> None:
     commands.add_parser("status", help="engine, model and hardware").set_defaults(handler=status)
     commands.add_parser("system", help="GPU, memory and CPU").set_defaults(handler=system)
     commands.add_parser("stop", help="stop the background app (unloads the model)")
-    serve = commands.add_parser("serve", help="run the app in this terminal (the web UI)")
+    serve = commands.add_parser("serve", help="open the web UI (starts the app if needed)")
     serve.add_argument("--no-browser", action="store_true")
-    return parser
 
 
 def _add_plan_flags(sub: argparse.ArgumentParser, with_model: bool = False) -> None:
