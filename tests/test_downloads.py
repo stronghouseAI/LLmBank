@@ -164,3 +164,29 @@ def test_rescan_rebuilds_index_from_archive(tmp_path: Path):
 
     assert LibraryIndexer(store, tmp_path / "archive").rescan() == 1
     assert store.list_entries()[0].repo_id == "owner/repo"
+
+
+def test_clicking_archive_twice_joins_the_running_job(tmp_path: Path):
+    # Regression: two jobs for one file raced on the same .part file and the
+    # loser failed with "No such file or directory: ...gguf.part".
+    hub = FakeHub({"m.gguf": b"x" * 100})
+    manager, _, _ = make_manager(tmp_path, hub)
+    first = manager.start("owner/repo", "m.gguf")
+    second = manager.start("owner/repo", "m.gguf")
+    assert second.id == first.id
+    job = wait_for(manager)
+    assert job.state is JobState.DONE, job.error
+    assert len(manager.jobs()) == 1
+
+
+def test_already_archived_file_is_not_downloaded_again(tmp_path: Path):
+    data = b"y" * 50
+    hub = FakeHub({"m.gguf": data})
+    remote = hub.client().list_gguf_files("owner/repo")[0]
+    (tmp_path / "m.gguf").write_bytes(data)
+    requests_before = len(hub.requests)
+
+    sha = hub.client().download("owner/repo", remote, tmp_path / "m.gguf")
+
+    assert sha == hashlib.sha256(data).hexdigest()
+    assert len(hub.requests) == requests_before
