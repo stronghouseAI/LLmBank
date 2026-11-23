@@ -322,31 +322,107 @@ function addMessage(role, text) {
   return el;
 }
 
-// Shown until the first words of the answer arrive. Reasoning models (Qwen3,
-// DeepSeek R1) can think for a minute before answering, which otherwise looks frozen.
-function showThinking(bubble) {
+// A reply bubble with a live "thinking" area. Reasoning models (Qwen3, DeepSeek R1)
+// think before they answer, sometimes for minutes on a laptop; showing that text
+// as it arrives makes clear the model is working, not frozen.
+function replyView(bubble) {
   const started = Date.now();
-  bubble.innerHTML = '<span class="thinking"><span class="spinner" aria-hidden="true"></span><span class="label">Thinking… 0s</span></span>';
+  bubble.innerHTML = `
+    <details class="thought" open>
+      <summary><span class="spinner" aria-hidden="true"></span><span class="label">Thinking… 0s</span></summary>
+      <div class="thought-text"></div>
+    </details>
+    <div class="answer"></div>`.replace(/>\s+</g, "><").trim();
+  const details = bubble.querySelector(".thought");
   const label = bubble.querySelector(".label");
-  const timer = setInterval(() => {
-    label.textContent = `Thinking… ${Math.round((Date.now() - started) / 1000)}s`;
-  }, 1000);
-  return () => clearInterval(timer);
+  const thoughtText = bubble.querySelector(".thought-text");
+  const answer = bubble.querySelector(".answer");
+  let thought = "";
+  let answering = false;
+  const seconds = () => Math.round((Date.now() - started) / 1000);
+  const words = () => (thought.match(/\S+/g) || []).length;
+  const tick = () => {
+    if (!answering) label.textContent = `Thinking… ${seconds()}s${thought ? ` · ${words()} words` : ""}`;
+  };
+  const timer = setInterval(tick, 1000);
+  const finishThinking = () => {
+    if (answering) return;
+    answering = true;
+    clearInterval(timer);
+    details.querySelector(".spinner")?.remove();
+    if (thought.trim()) {
+      label.textContent = `Thought for ${seconds()}s (${words()} words)`;
+      details.open = false;
+    } else {
+      details.remove();
+    }
+  };
+  return {
+    addThought(text) {
+      thought += text;
+      thoughtText.textContent = thought;
+      thoughtText.scrollTop = thoughtText.scrollHeight;
+      tick();
+    },
+    addAnswer(text) { finishThinking(); answer.textContent += text; },
+    answer: () => answer.textContent,
+    end(note) { finishThinking(); clearInterval(timer); if (note) answer.textContent += note; },
+  };
+}
+
+// Some models write their reasoning inline as <think>...</think> instead of in a
+// separate field; route that part to the thinking area too.
+function inlineThinkSplitter(view) {
+  let mode = "start";  // start -> (think) -> answer
+  let pending = "";
+  return (text) => {
+    pending += text;
+    if (mode === "start") {
+      const trimmed = pending.trimStart();
+      if ("<think>".startsWith(trimmed)) return;  // could still become <think>
+      if (trimmed.startsWith("<think>")) { mode = "think"; pending = trimmed.slice(7); }
+      else { mode = "answer"; }
+    }
+    if (mode === "think") {
+      const end = pending.indexOf("</think>");
+      if (end === -1) {
+        const safe = pending.length - 8;  // keep a possible partial closing tag
+        if (safe > 0) { view.addThought(pending.slice(0, safe)); pending = pending.slice(safe); }
+        return;
+      }
+      view.addThought(pending.slice(0, end));
+      pending = pending.slice(end + 8).trimStart();
+      mode = "answer";
+    }
+    if (mode === "answer" && pending) { view.addAnswer(pending); pending = ""; }
+  };
+}
+
+let chatAbort = null;
+
+function setChatBusy(busy) {
+  $("#chat-form button[type=submit]").hidden = busy;
+  $("#chat-stop").hidden = !busy;
 }
 
 async function sendChat(text) {
   chatHistory.push({ role: "user", content: text });
   addMessage("user", text);
-  const bubble = addMessage("assistant", "");
-  const stopThinking = showThinking(bubble);
-  const send = $("#chat-form button[type=submit]");
-  send.disabled = true;
-  let reply = "";
+  const view = replyView(addMessage("assistant", ""));
+  const addContent = inlineThinkSplitter(view);
+  chatAbort = new AbortController();
+  setChatBusy(true);
+  const body = { messages: chatHistory };
+  if (!$("#chat-think").checked) {
+    // Understood by Qwen3 and other templates with a thinking switch; others ignore it.
+    body.chat_template_kwargs = { enable_thinking: false };
+  }
   try {
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: chatHistory }),
+      body: JSON.stringify(body),
+      signal: chatAbort.signal,
     });
     if (!response.ok) {
       const detail = await response.json().catch(() => ({}));
@@ -363,33 +439,33 @@ async function sendChat(text) {
       buffer = lines.pop();
       for (const line of lines) {
         if (!line.startsWith("data: ") || line.includes("[DONE]")) continue;
-        const delta = JSON.parse(line.slice(6)).choices?.[0]?.delta?.content;
-        if (delta) {
-          if (!reply) stopThinking();
-          reply += delta;
-          bubble.textContent = reply;
-        }
+        const delta = JSON.parse(line.slice(6)).choices?.[0]?.delta ?? {};
+        if (delta.reasoning_content) view.addThought(delta.reasoning_content);
+        if (delta.content) addContent(delta.content);
       }
     }
-    stopThinking();
-    if (!reply) bubble.textContent = "(The model sent an empty answer.)";
-    chatHistory.push({ role: "assistant", content: reply });
+    view.end(view.answer() ? "" : "(The model sent an empty answer.)");
+    chatHistory.push({ role: "assistant", content: view.answer() });
   } catch (error) {
-    stopThinking();
-    bubble.textContent = `Error: ${error.message}`;
-    chatHistory.pop();
+    const stopped = error.name === "AbortError";
+    view.end(stopped ? (view.answer() ? "\n\n(Stopped.)" : "(Stopped.)") : `Error: ${error.message}`);
+    if (stopped && view.answer() !== "(Stopped.)") chatHistory.push({ role: "assistant", content: view.answer() });
+    else chatHistory.pop();
   } finally {
-    send.disabled = false;
+    chatAbort = null;
+    setChatBusy(false);
   }
 }
 
 $("#chat-form").addEventListener("submit", (event) => {
   event.preventDefault();
+  if (chatAbort) return;
   const text = $("#chat-input").value.trim();
   if (!text) return;
   $("#chat-input").value = "";
   sendChat(text);
 });
+$("#chat-stop").addEventListener("click", () => chatAbort?.abort());
 $("#chat-input").addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); $("#chat-form").requestSubmit(); }
 });

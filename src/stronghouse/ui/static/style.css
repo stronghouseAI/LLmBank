@@ -156,3 +156,14 @@ dialog::backdrop { background: rgb(0 0 0 / .5); }
   border: 2px solid var(--border); border-top-color: var(--accent); animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
+
+/* Live thinking area in chat replies */
+.msg.assistant .thought { margin-bottom: .4rem; color: var(--muted); font-size: .85rem; white-space: normal; }
+.msg.assistant .thought summary { display: flex; align-items: center; gap: .5rem; cursor: pointer; list-style: none; }
+.msg.assistant .thought summary::-webkit-details-marker { display: none; }
+.thought-text { white-space: pre-wrap; max-height: 180px; overflow: auto; margin-top: .35rem;
+  padding-left: .6rem; border-left: 2px solid var(--border); font-style: italic; }
+.thought-text:empty { display: none; }
+.answer:empty { display: none; }
+.think-toggle { display: flex; align-items: center; gap: .3rem; margin: 0; white-space: nowrap; color: var(--muted); }
+.think-toggle input { width: auto; }
