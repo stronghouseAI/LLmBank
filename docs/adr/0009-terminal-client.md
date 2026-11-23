@@ -20,9 +20,16 @@ commands in the spirit of nmap: `vault ls`, `vault load <model>`,
 - If the app is not running, the first command starts it in the background
   (`stronghouse serve --no-browser`, logging to `<data dir>/server.log`, PID in
   `server.pid`). `shai stop` stops that background app, which unloads the model.
+  `stronghouse` (or `shai serve`) checks for a running app first and just opens
+  the browser to it, so the two never fight over port 8765.
+- Loading a model unloads the current one before planning (in the API, so the
+  web UI gets it too). Otherwise the old model's GPU memory looks taken and the
+  planner picks a CPU-only plan. A plan preview made while a model is loaded
+  says so in its notes.
 - Commands are subcommands with flags (`shai vault load qwen3-8b --ctx 16384`),
   like git or docker, so `--help` works at every level. Models can be named by
-  vault id or by any unique part of the file or repo name.
+  vault id or by any unique part of the file or repo name. Matching ignores case
+  and separators, so `qwen3_8b`, `Qwen3-8B` and `qwen3 8b` are the same.
 - `discover --max-gb N` checks the files of the top 10 results and keeps repos
   with a file of at most N GB, showing the largest such file.
 - Every agent action in `shai quest` waits for a typed `y` in the terminal, the

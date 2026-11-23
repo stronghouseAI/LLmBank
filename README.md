@@ -31,13 +31,13 @@ Inference itself is done by [llama.cpp](https://github.com/ggml-org/llama.cpp)'s
 
 Everything also works from the terminal. The first command starts the app in the
 background if it is not already running, so the web UI and the terminal share
-the same loaded model.
+the same loaded model. `uv run stronghouse` then just opens the browser to it.
 
 ```bash
 shai vault ls                          # models on your disk
 shai vault load qwen3-8b               # Auto-fit and load (by id or part of the name)
 shai vault load deepseek --ctx 16384 --kv q8_0 --n-cpu-moe 10
-shai chat                              # talk to it; --no-think for quick answers
+shai chat "hi"                         # talk to it; --no-think for quick answers
 shai ask "What is 17 times 23?"
 shai discover qwen3 --max-gb 8 --moe   # Hugging Face search with filters
 shai files Qwen/Qwen3-8B-GGUF          # which files fit your computer
