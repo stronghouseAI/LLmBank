@@ -19,7 +19,14 @@ from stronghouse.services.skills.web import WebSkills
 __all__ = ["SkillError", "SkillExecutor", "resolve_path"]
 
 WEB_TIMEOUT = httpx.Timeout(20.0)
-_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) StronghouseAI/0.1"
+# Many sites answer 403 to anything that does not look like a normal browser, so the
+# web skills send ordinary desktop-browser headers. Every request is still one the
+# user approved.
+_BROWSER_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0"),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-GB,en;q=0.7",
+}
 
 
 class SkillExecutor:
@@ -32,9 +39,7 @@ class SkillExecutor:
         self._add_note = add_note
         web = WebSkills(
             http
-            or httpx.Client(
-                timeout=WEB_TIMEOUT, follow_redirects=True, headers={"User-Agent": _USER_AGENT}
-            )
+            or httpx.Client(timeout=WEB_TIMEOUT, follow_redirects=True, headers=_BROWSER_HEADERS)
         )
         desktop = DesktopSkills(run)
         self._handlers: dict[str, Callable[[dict], str]] = {

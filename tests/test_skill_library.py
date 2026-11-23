@@ -201,3 +201,37 @@ def test_utility_skills(executor):
         executor.execute(1, "calculator", {"expression": "import os"})
     fixed = datetime(2026, 11, 23, 18, 30, tzinfo=UTC)
     assert current_datetime({}, now=lambda: fixed).startswith("Monday 23 November 2026, 18:30")
+
+
+LITE_PAGE = """<table><tr><td><a rel="nofollow" href="https://www.theguardian.com/uk"
+class="result-link">The Guardian</a></td></tr>
+<tr><td class="result-snippet">Latest UK news</td></tr></table>"""
+
+
+def test_lite_search_page_is_parsed():
+    results = parse_search_results(LITE_PAGE)
+    assert results[0].url == "https://www.theguardian.com/uk"
+    assert results[0].snippet == "Latest UK news"
+
+
+def blocking_web(request: httpx.Request) -> httpx.Response:
+    if request.url.host == "html.duckduckgo.com":
+        return httpx.Response(202, text="<html>anomaly</html>")  # bot check, no results
+    if request.url.host == "lite.duckduckgo.com":
+        return httpx.Response(200, text=LITE_PAGE)
+    return httpx.Response(403)
+
+
+def test_blocked_sites_explain_what_to_try_and_search_falls_back():
+    http = httpx.Client(transport=httpx.MockTransport(blocking_web))
+    skills = SkillExecutor(lambda *_: None, http=http)
+    with pytest.raises(SkillError, match=r"site\.test refused the request \(403\).*RSS"):
+        skills.execute(1, "fetch_web_page", {"url": "https://site.test/page"})
+    assert "theguardian.com/uk" in skills.execute(1, "web_search", {"query": "guardian"})
+
+
+def test_search_failure_names_the_reason():
+    http = httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(403)))
+    skills = SkillExecutor(lambda *_: None, http=http)
+    with pytest.raises(SkillError, match="answered 403"):
+        skills.execute(1, "web_search", {"query": "guardian"})

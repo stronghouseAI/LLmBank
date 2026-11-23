@@ -28,6 +28,11 @@ asked for a library of 10-15 genuinely useful skills.
 - **Web search** reads DuckDuckGo's no-JavaScript results page because it needs no API
   key. That page is not a stable API: if it changes, the skill returns "No results"
   rather than crashing, and the parser in `core/text_extract.py` is the one place to fix.
+  If the html page refuses or sends a bot check, the lite page is tried next.
+- **Blocked sites (added after the first live test, 403 Forbidden):** web skills send
+  ordinary desktop-browser headers, because many sites refuse anything else. A 401, 403
+  or 429 becomes a message that tells the agent to try the site's RSS feed or a search,
+  so a small model has a next step instead of giving up.
 - **Safety choices:** move never overwrites; there is deliberately no delete skill;
   web skills accept only http/https; downloads are capped at 3 MB and all results are
   truncated so they fit a small model's context.
