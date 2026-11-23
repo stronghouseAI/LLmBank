@@ -17,6 +17,7 @@ import time
 
 from stronghouse.cli import render
 from stronghouse.cli.client import ApiClient, ApiError, connect, stop_background_server
+from stronghouse.cli.reference import HELP_WORDS, reference_text
 from stronghouse.cli.render import format_bytes, paint
 from stronghouse.config import Settings, load_settings
 
@@ -534,11 +535,13 @@ def _add_plan_flags(sub: argparse.ArgumentParser, with_model: bool = False) -> N
 
 def run(argv: list[str], settings: Settings, api: ApiClient | None = None) -> int:
     """Parse and run one command. Returns the process exit code."""
+    if not argv or argv[0] in HELP_WORDS:
+        print(reference_text(paint))
+        return 0
+    if argv[-1] == "-help":  # `shai vault load -help`, the single-dash habit from nmap
+        argv = [*argv[:-1], "--help"]
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.command is None:
-        parser.print_help()
-        return 0
     if args.command == "serve":
         from stronghouse.__main__ import serve
 

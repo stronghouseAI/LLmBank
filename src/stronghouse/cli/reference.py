@@ -1,0 +1,101 @@
+"""The full command reference shown by `shai --help`, `shai -help`, `shai -h` and `shai help`.
+
+Kept in one place so the terminal and the README stay in step. Per-command details
+(`shai vault load --help`) still come from argparse in commands.py.
+"""
+
+from __future__ import annotations
+
+HELP_WORDS = frozenset({"help", "-h", "-help", "--help", "-?"})
+
+# (section title, [(usage, what it does), ...])
+SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
+    (
+        "VAULT  models on your disk",
+        [
+            ("vault ls [SEARCH]", "List your models (id, file, size, architecture, MoE)"),
+            ("vault rescan", "Re-index the archive folder, e.g. after copying models in"),
+            ("vault plan MODEL", "Show how MODEL would be split between GPU and RAM"),
+            ("load MODEL", "Auto-fit and load MODEL, wait until it is ready"),
+            ("unload", "Unload the model and free GPU memory"),
+        ],
+    ),
+    (
+        "LOAD OPTIONS  for load and vault plan",
+        [
+            ("MODEL", "Vault id (shai load 3) or part of the name (shai load qwen3-8b)"),
+            ("--ctx N", "Context length in tokens (default 8192)"),
+            ("--kv q8_0", "Half-size KV cache, for longer context (default f16)"),
+            ("--n-cpu-moe N", "Put the experts of the first N blocks in RAM (MoE models)"),
+            ("--ngl N", "Number of layers on the GPU (--n-gpu-layers)"),
+        ],
+    ),
+    (
+        "DISCOVER  Hugging Face",
+        [
+            ("discover QUERY", "Search GGUF models, most downloaded first"),
+            ("  --max-gb N", "Only repos with a file of at most N GB, and show that file"),
+            ("  --size S", "tiny <4B, small 4-9B, medium 9-20B, large 20-40B, huge >40B"),
+            ("  --type T", "chat, vision or embedding"),
+            ("  --moe", "Mixture-of-Experts models only"),
+            ("  --sort S", "downloads, likes, trending or updated"),
+            ("files REPO", "A repo's files: fits in GPU, GPU + RAM, or too big"),
+            ("  --max-gb N / --all", "Hide files over N GB / also show files too big"),
+            ("get REPO FILE", "Download FILE into your vault, with a progress bar"),
+        ],
+    ),
+    (
+        "CHAT  with the loaded model",
+        [
+            ("chat", "Talk back and forth. /clear starts over, /exit or Ctrl+D quits"),
+            ('ask "QUESTION"', "One question, one answer"),
+            ("  --no-think", "Answer straight away, skip thinking (Qwen3)"),
+            ("  --show-thinking", "Print the model's thinking as it goes"),
+            ("bench", "Speed test: tokens per second"),
+        ],
+    ),
+    (
+        "GUILD  agents (create them in the web app's Guild tab)",
+        [
+            ("agents", "List your agents and their skills"),
+            ('quest AGENT "TASK"', "Send an agent on a quest. Asks y/n before every action"),
+            ("  --reviewer AGENT", "A second agent checks the work"),
+        ],
+    ),
+    (
+        "SYSTEM",
+        [
+            ("status", "Engine state, loaded model and its plan, GPU and memory"),
+            ("system", "GPU, memory and CPU"),
+            ("serve", "Run the app in this terminal and open the web UI"),
+            ("stop", "Stop the background app (also unloads the model)"),
+            ("help", "This page. Details of one command: shai COMMAND --help"),
+        ],
+    ),
+]
+
+EXAMPLES = [
+    ("shai discover qwen3 --max-gb 8", "find Qwen3 models that fit in 8 GB"),
+    ("shai files Qwen/Qwen3-8B-GGUF", "see which of its files fit your computer"),
+    ("shai get Qwen/Qwen3-8B-GGUF Qwen3-8B-Q4_K_M.gguf", "download one"),
+    ("shai load qwen3-8b", "load it"),
+    ('shai ask "What is 17 times 23?" --no-think', "quick answer"),
+    ("shai load deepseek --ctx 16384 --kv q8_0", "bigger model, longer context"),
+    ('shai quest Newsie "UK headlines into ~/Documents/news.md"', "run an agent"),
+]
+
+
+def reference_text(paint=lambda text, *_styles: text) -> str:
+    """The whole reference as plain text; pass render.paint for colours."""
+    width = max(len(usage) for _, rows in SECTIONS for usage, _ in rows) + 2
+    lines = [
+        paint("StronghouseAI terminal (shai)", "bold", "brass"),
+        "Usage: shai COMMAND [OPTIONS]    The app starts in the background if needed;",
+        "       the web UI (uv run stronghouse) shares the same models and agents.",
+    ]
+    for title, rows in SECTIONS:
+        lines += ["", paint(title, "bold")]
+        lines += [f"  {usage.ljust(width)}{text}" for usage, text in rows]
+    lines += ["", paint("EXAMPLES", "bold")]
+    lines += [f"  {command}\n      {paint(note, 'dim')}" for command, note in EXAMPLES]
+    return "\n".join(lines)
