@@ -8,7 +8,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
-from stronghouse.core.agents import Agent, AgentClass, Quest, QuestState, QuestStep, StepKind
+from stronghouse.core.agents import Agent, Quest, QuestState, QuestStep, StepKind
 from stronghouse.storage.sqlite_db import open_database
 
 _MIGRATIONS_PACKAGE = "stronghouse.storage.agent_migrations"
@@ -27,21 +27,21 @@ class AgentStore:
     def save_agent(self, agent: Agent) -> Agent:
         """Insert a new agent (id is None) or update an existing one."""
         values = (
-            agent.name.strip(), agent.agent_class.value, agent.portrait, agent.personality,
+            agent.name.strip(), agent.portrait, agent.personality,
             json.dumps(agent.skills), agent.creativity, agent.diligence, agent.xp,
         )  # fmt: skip
         with self._lock, self._connection:
             if agent.id is None:
                 cursor = self._connection.execute(
-                    """INSERT INTO agents (name, agent_class, portrait, personality, skills,
+                    """INSERT INTO agents (name, portrait, personality, skills,
                                            creativity, diligence, xp)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
                     values,
                 )
                 agent_id = cursor.lastrowid
             else:
                 self._connection.execute(
-                    """UPDATE agents SET name = ?, agent_class = ?, portrait = ?, personality = ?,
+                    """UPDATE agents SET name = ?, portrait = ?, personality = ?,
                        skills = ?, creativity = ?, diligence = ?, xp = ? WHERE id = ?""",
                     (*values, agent.id),
                 )
@@ -149,7 +149,6 @@ def _to_agent(row) -> Agent:
     return Agent(
         id=row["id"],
         name=row["name"],
-        agent_class=AgentClass(row["agent_class"]),
         portrait=row["portrait"],
         personality=row["personality"],
         skills=json.loads(row["skills"]),

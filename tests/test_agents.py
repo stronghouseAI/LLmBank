@@ -7,10 +7,8 @@ from pathlib import Path
 import pytest
 
 from stronghouse.core.agents import (
-    MAX_SKILL_SLOTS,
-    STARTER_AGENTS,
+    SKILLS,
     Agent,
-    AgentClass,
     ModelTurn,
     QuestState,
     StepKind,
@@ -32,7 +30,6 @@ from stronghouse.storage.agent_store import AgentStore
 def make_agent(**changes) -> Agent:
     values = dict(
         name="Mira",
-        agent_class=AgentClass.SCOUT,
         portrait="🧭",
         personality="Precise.",
         skills=["read_file", "write_file", "take_note"],
@@ -63,19 +60,6 @@ def test_level_grows_with_xp():
         ({"name": "  "}, "name"),
         ({"skills": ["fly"]}, "Unknown skills"),
         ({"creativity": 11}, "creativity"),
-        (
-            {
-                "skills": [
-                    "read_file",
-                    "write_file",
-                    "take_note",
-                    "run_command",
-                    "list_folder",
-                    "search_files",
-                ]
-            },
-            f"at most {MAX_SKILL_SLOTS}",
-        ),
     ],
 )
 def test_invalid_character_sheets_are_rejected(changes, message):
@@ -86,7 +70,7 @@ def test_invalid_character_sheets_are_rejected(changes, message):
 def test_system_prompt_includes_identity_and_journal():
     prompt = system_prompt_for(make_agent(), ["The user's projects live in ~/code"], "/home/phil")
     assert "You are Mira" in prompt
-    assert "scout" in prompt
+    assert "Precise." in prompt
     assert "~/code" in prompt
     assert "/home/phil/Downloads" in prompt  # so agents stop guessing "/Downloads"
 
@@ -105,9 +89,16 @@ def test_bad_agent_card_is_rejected():
         agent_from_card({"name": "x"})
 
 
-def test_starter_agents_are_valid():
-    for agent in STARTER_AGENTS:
-        validate_agent(agent)
+def test_any_agent_can_equip_every_skill():
+    validate_agent(make_agent(skills=list(SKILLS)))
+
+
+def test_version_1_cards_with_a_class_still_load():
+    card = {"format": "stronghouse-agent", "version": 1, "name": "Herald",
+            "agent_class": "scholar", "skills": ["read_news_feed"]}  # fmt: skip
+    agent = agent_from_card(card)
+    assert agent.name == "Herald" and agent.skills == ["read_news_feed"]
+    assert "agent_class" not in agent_to_card(agent)
 
 
 def test_review_marker():
@@ -307,7 +298,7 @@ def test_cancel_while_waiting_for_approval(store: AgentStore, tmp_path: Path):
 
 def test_party_reviewer_sends_work_back_once(store: AgentStore):
     worker = store.save_agent(make_agent(name="Quill"))
-    reviewer = store.save_agent(make_agent(name="Warden", agent_class=AgentClass.REVIEWER))
+    reviewer = store.save_agent(make_agent(name="Warden"))
     runner, model = make_runner(
         store,
         [
@@ -334,3 +325,27 @@ def test_invalid_party_is_rejected(store: AgentStore, agent_ids):
     runner, _ = make_runner(store, [])
     with pytest.raises(QuestError):
         runner.start("task", agent_ids)
+
+
+def test_existing_agents_survive_the_class_removal(tmp_path: Path):
+    """A database made before migration 002 keeps its agents, without the class column."""
+    import sqlite3
+
+    from stronghouse.storage import agent_migrations
+
+    path = tmp_path / "agents.sqlite3"
+    first = (Path(agent_migrations.__file__).parent / "001_create_agents.sql").read_text()
+    with sqlite3.connect(path) as old:
+        old.executescript(first)
+        old.execute(
+            "INSERT INTO agents (name, agent_class, skills, creativity, diligence, xp)"
+            " VALUES ('Herald', 'scholar', '[\"read_news_feed\"]', 2, 5, 30)"
+        )
+        old.execute("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY)")
+        old.execute("INSERT INTO schema_migrations VALUES (1)")
+    store = AgentStore(path)
+    try:
+        [herald] = store.list_agents()
+        assert herald.name == "Herald" and herald.skills == ["read_news_feed"] and herald.xp == 30
+    finally:
+        store.close()
