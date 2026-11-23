@@ -24,6 +24,15 @@ MAX_DOWNLOAD_BYTES = 3 * 1024 * 1024
 # or answers with a "too many requests" page instead of results.
 SEARCH_URLS = ("https://html.duckduckgo.com/html/", "https://lite.duckduckgo.com/lite/")
 _FEED_TYPES = ("rss", "atom", "xml")
+_REFUSED = (401, 403, 429)
+# Second try for sites that refuse plain app requests. Some bot filters refuse
+# requests that claim to be a browser, others refuse anything that does not, so
+# the honest name goes first and this only after a refusal.
+BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-GB,en;q=0.7",
+}
 
 
 class WebSkills:
@@ -52,6 +61,8 @@ class WebSkills:
         for url in SEARCH_URLS:
             try:
                 response = self._http.post(url, data={"q": query})
+                if response.status_code in _REFUSED:
+                    response = self._http.post(url, data={"q": query}, headers=BROWSER_HEADERS)
             except httpx.HTTPError as error:
                 problem = str(error)
                 continue
@@ -68,9 +79,19 @@ class WebSkills:
 
     def _get(self, url: str) -> tuple[str, str]:
         try:
-            with self._http.stream("GET", url) as response:
-                if response.status_code in (401, 403, 429):
-                    raise SkillError(_blocked_message(url, response.status_code))
+            return self._download(url, headers=None)
+        except _Refused:
+            pass
+        try:
+            return self._download(url, headers=BROWSER_HEADERS)
+        except _Refused as refused:
+            raise SkillError(_blocked_message(url, refused.status)) from None
+
+    def _download(self, url: str, headers: dict | None) -> tuple[str, str]:
+        try:
+            with self._http.stream("GET", url, headers=headers) as response:
+                if response.status_code in _REFUSED:
+                    raise _Refused(response.status_code)
                 response.raise_for_status()
                 chunks, size = [], 0
                 for chunk in response.iter_bytes():
@@ -83,6 +104,12 @@ class WebSkills:
         except httpx.HTTPError as error:
             raise SkillError(f"Could not fetch {url}: {error}") from error
         return b"".join(chunks).decode(encoding, errors="replace"), content_type
+
+
+class _Refused(Exception):
+    def __init__(self, status: int) -> None:
+        super().__init__(status)
+        self.status = status
 
 
 def _blocked_message(url: str, status: int) -> str:
