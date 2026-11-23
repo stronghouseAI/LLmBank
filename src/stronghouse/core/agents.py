@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from stronghouse.core.skill_catalog import SKILLS
+
 # Small local models get confused by long tool lists, so each agent equips a
 # limited number of skills. This is both a game rule and a real quality limit.
 MAX_SKILL_SLOTS = 5
@@ -35,62 +37,6 @@ CLASS_DESCRIPTIONS = {
     AgentClass.SCOUT: "You search the computer to find files and facts quickly.",
     AgentClass.REVIEWER: "You check work done by others and point out concrete problems.",
 }
-
-
-@dataclass(frozen=True)
-class SkillSpec:
-    """A tool an agent can use. `parameters` is a JSON Schema object."""
-
-    name: str
-    title: str
-    description: str
-    parameters: dict
-    needs_approval: bool
-
-
-def _schema(required: list[str], **properties: str) -> dict:
-    return {
-        "type": "object",
-        "properties": {
-            name: {"type": "string", "description": d} for name, d in properties.items()
-        },
-        "required": required,
-    }
-
-
-SKILLS: dict[str, SkillSpec] = {
-    spec.name: spec
-    for spec in [
-        SkillSpec(
-            "read_file", "Read file", "Read a text file and return its contents.",
-            _schema(["path"], path="Absolute path or a path starting with ~"), True,
-        ),
-        SkillSpec(
-            "list_folder", "List folder", "List the files and folders inside a folder.",
-            _schema(["path"], path="Folder path"), True,
-        ),
-        SkillSpec(
-            "search_files", "Search files",
-            "Find text files under a folder whose name or contents contain the query.",
-            _schema(["folder", "query"], folder="Folder to search in", query="Text to look for"),
-            True,
-        ),
-        SkillSpec(
-            "write_file", "Write file", "Create or overwrite a text file with the given content.",
-            _schema(["path", "content"], path="File path", content="Full text to write"), True,
-        ),
-        SkillSpec(
-            "run_command", "Run command",
-            "Run a shell command on the user's computer and return its output.",
-            _schema(["command"], command="The shell command to run"), True,
-        ),
-        SkillSpec(
-            "take_note", "Take note",
-            "Save a short note to your own journal so you remember it in future quests.",
-            _schema(["note"], note="What to remember"), False,
-        ),
-    ]
-}  # fmt: skip
 
 
 @dataclass(frozen=True)
@@ -271,7 +217,7 @@ STARTER_AGENTS = [
     Agent(
         name="Mira", agent_class=AgentClass.SCOUT, portrait="🧭",
         personality="Quick, curious and precise. Reports exactly where things are.",
-        skills=["list_folder", "search_files", "read_file", "take_note"],
+        skills=["list_folder", "search_files", "read_file", "read_pdf", "take_note"],
         creativity=2, diligence=5,
     ),
     Agent(
@@ -285,6 +231,12 @@ STARTER_AGENTS = [
         personality="Practical and careful. Explains each command before running it.",
         skills=["list_folder", "read_file", "write_file", "run_command", "take_note"],
         creativity=3, diligence=7,
+    ),
+    Agent(
+        name="Herald", agent_class=AgentClass.SCHOLAR, portrait="📰",
+        personality="Calm news reader. Gives neutral headlines with their sources and dates.",
+        skills=["read_news_feed", "fetch_web_page", "web_search", "current_datetime", "take_note"],
+        creativity=2, diligence=5,
     ),
     Agent(
         name="Warden", agent_class=AgentClass.REVIEWER, portrait="🛡️",

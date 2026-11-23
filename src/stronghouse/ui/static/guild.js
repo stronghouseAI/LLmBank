@@ -4,6 +4,9 @@
 
 const QUEST_POLL_MS = 1200;
 const ACTIVE_QUEST_STATES = ["running", "waiting_approval"];
+const SKILL_CATEGORY_NAMES = {
+  files: "📁 Files", web: "🌐 Web", documents: "📄 Documents", desktop: "🖥️ Desktop", utility: "🧮 Utility",
+};
 const guild = { catalog: null, agents: [], editingId: null, questId: null };
 
 async function loadGuild() {
@@ -56,10 +59,13 @@ function skillTitle(name) {
 function renderCatalogOptions() {
   const { classes, skills, starters } = guild.catalog;
   $("#agent-class").innerHTML = classes.map((c) => `<option value="${c.id}">${escapeHtml(c.id)}</option>`).join("");
-  $("#agent-skills").innerHTML = skills.map((s) => `
+  const categories = [...new Set(skills.map((s) => s.category))];
+  $("#agent-skills").innerHTML = categories.map((category) => `
+    <div class="skill-category">${escapeHtml(SKILL_CATEGORY_NAMES[category] ?? category)}</div>
+    ${skills.filter((s) => s.category === category).map((s) => `
     <label><input type="checkbox" value="${escapeHtml(s.name)}">
       <span>${escapeHtml(s.title)}${s.needs_approval ? " 🔒" : ""}<small>${escapeHtml(s.description)}</small></span>
-    </label>`).join("");
+    </label>`).join("")}`).join("");
   $("#starter-list").innerHTML = starters.map((card, index) => `
     <div class="item"><span>${escapeHtml(card.portrait)} <strong>${escapeHtml(card.name)}</strong>
       <span class="muted">${escapeHtml(card.agent_class)} · ${escapeHtml(card.personality)}</span></span>
