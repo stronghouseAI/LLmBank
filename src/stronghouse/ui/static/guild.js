@@ -28,9 +28,40 @@ async function loadAgents() {
   $("#agent-list").innerHTML = guild.agents.map(agentCard).join("")
     || '<p class="muted">No agents yet. Create one or recruit a starter below.</p>';
   const options = guild.agents.map((a) => `<option value="${a.id}">${escapeHtml(a.portrait)} ${escapeHtml(a.name)}</option>`).join("");
+  const [worker, reviewer] = [$("#quest-worker").value, $("#quest-reviewer").value];
   $("#quest-worker").innerHTML = options;
   $("#quest-reviewer").innerHTML = `<option value="">No reviewer</option>${options}`;
+  if (guild.agents.some((a) => String(a.id) === worker)) $("#quest-worker").value = worker;
+  $("#quest-reviewer").value = guild.agents.some((a) => String(a.id) === reviewer) ? reviewer : "";
+  updateQuestHint();
 }
+
+// Tasks that clearly need a kind of skill, so we can warn before a quest is wasted.
+const TASK_NEEDS = [
+  { pattern: /https?:\/\/|\brss\b|\bfeed\b|\bwebsite\b|\bweb\b|\bonline\b|\binternet\b|\bheadlines?\b|\bnews\b|\bsearch the\b/i,
+    skills: ["fetch_web_page", "read_news_feed", "web_search"], label: "🌐 Web" },
+  { pattern: /\.pdf\b|\bpdf\b/i, skills: ["read_pdf"], label: "Read PDF" },
+];
+
+function updateQuestHint() {
+  const hint = $("#quest-skill-hint");
+  const agent = guild.agents.find((a) => String(a.id) === $("#quest-worker").value);
+  if (!agent) { hint.textContent = ""; return; }
+  const skills = agent.skills.map(skillTitle).join(", ") || "no skills";
+  const task = $("#quest-task").value;
+  const missing = TASK_NEEDS.find((need) => need.pattern.test(task) && !need.skills.some((s) => agent.skills.includes(s)));
+  if (!missing) {
+    hint.innerHTML = `${escapeHtml(agent.name)} can: ${escapeHtml(skills)}`;
+    return;
+  }
+  const able = guild.agents.filter((a) => missing.skills.some((s) => a.skills.includes(s))).map((a) => a.name);
+  const suggestion = able.length ? `Pick ${escapeHtml(able.join(" or "))}` : "Recruit Herald or edit an agent";
+  hint.innerHTML = `<span class="warning">⚠ ${escapeHtml(agent.name)} has no ${escapeHtml(missing.label)} skill for this task
+    (can: ${escapeHtml(skills)}). ${suggestion}, or press Edit to add it.</span>`;
+}
+
+$("#quest-worker").addEventListener("change", updateQuestHint);
+$("#quest-task").addEventListener("input", updateQuestHint);
 
 function agentCard(agent) {
   const xpIntoLevel = agent.xp % 50;
@@ -199,6 +230,7 @@ $("#quest-start").addEventListener("click", async () => {
   const worker = Number($("#quest-worker").value);
   const reviewer = Number($("#quest-reviewer").value);
   if (!task || !worker) { toast("Pick an agent and describe the task."); return; }
+  if ($("#quest-skill-hint .warning") && !confirm("This agent seems to lack a skill this task needs. Start anyway?")) return;
   const agentIds = reviewer && reviewer !== worker ? [worker, reviewer] : [worker];
   const quest = await withErrors(() => api("/quests", { method: "POST", body: { task, agent_ids: agentIds } }));
   if (!quest) return;
