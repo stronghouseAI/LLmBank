@@ -263,6 +263,12 @@ async function pollEngine() {
   const model = status.model_path ? status.model_path.split("/").pop() : "";
   pill.textContent = `engine: ${status.state}${model ? ` · ${model}` : ""}`;
   $("#run-log").textContent = status.log_tail.join("\n");
+  const outOfMemory = status.state === "crashed" && status.log_tail.some((l) => /failed to allocate/i.test(l));
+  if (outOfMemory && !pollEngine.warned) {
+    pollEngine.warned = true;
+    toast("Ran out of GPU memory. Try a smaller context, a q8_0 KV cache, or more experts on CPU.");
+  }
+  if (status.state !== "crashed") pollEngine.warned = false;
 }
 
 // ---------- chat ----------

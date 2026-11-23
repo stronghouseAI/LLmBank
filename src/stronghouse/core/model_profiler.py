@@ -14,6 +14,10 @@ from stronghouse.core.models import ModelProfile
 _EXPERT_TENSOR = re.compile(r"^blk\.(\d+)\.ffn_\w+_exps\.")
 _BLOCK_TENSOR = re.compile(r"^blk\.(\d+)\.")
 _TOKEN_EMBEDDING = "token_embd.weight"
+# Newer DeepSeek conversions split the latent attention weights into attn_k_b /
+# attn_v_b tensors. Only then does llama.cpp keep the small compressed (MLA) KV
+# cache; older files of the same model get a full-size KV cache.
+_MLA_SPLIT_TENSOR = re.compile(r"^blk\.\d+\.attn_k_b\.")
 _F16_BYTES = 2
 
 
@@ -39,7 +43,9 @@ def profile_model(metadata: Mapping[str, object], tensors: Iterable[SizedTensor]
     dense_bytes = [0] * block_count
     output_bytes = 0
     token_embedding_bytes = 0
+    has_mla_split = False
     for tensor in tensors:
+        has_mla_split = has_mla_split or bool(_MLA_SPLIT_TENSOR.match(tensor.name))
         if expert_match := _EXPERT_TENSOR.match(tensor.name):
             expert_bytes[_block_index(expert_match, block_count)] += tensor.size_bytes
         elif block_match := _BLOCK_TENSOR.match(tensor.name):
@@ -59,19 +65,26 @@ def profile_model(metadata: Mapping[str, object], tensors: Iterable[SizedTensor]
         dense_bytes_per_layer=dense_bytes,
         output_bytes=output_bytes,
         token_embedding_bytes=token_embedding_bytes,
-        kv_bytes_per_token_f16=_kv_bytes_per_token(metadata, architecture, block_count),
+        kv_bytes_per_token_f16=_kv_bytes_per_token(
+            metadata, architecture, block_count, has_mla_split
+        ),
     )
 
 
-def _kv_bytes_per_token(metadata: Mapping[str, object], arch: str, block_count: int) -> int:
+def _kv_bytes_per_token(
+    metadata: Mapping[str, object], arch: str, block_count: int, has_mla_split: bool
+) -> int:
     """Estimate f16 KV cache bytes per token across all blocks.
 
     Models with multi-head latent attention (DeepSeek style) cache one compressed
-    vector per token instead of full keys and values, which is much smaller.
-    Sliding-window layers are not modelled, so this errs on the high side.
+    vector per token instead of full keys and values, but only when the GGUF was
+    converted with the split attn_k_b tensors (llama.cpp, 2025 onwards). Older
+    files fall back to full keys and values, roughly 9x larger: underestimating
+    that made a DeepSeek-V2-Lite plan fail with "failed to allocate buffer for
+    kv cache". Sliding-window layers are not modelled, so this errs high.
     """
     kv_lora_rank = _int(metadata, f"{arch}.attention.kv_lora_rank")
-    if kv_lora_rank:
+    if kv_lora_rank and has_mla_split:
         rope_dims = _int(metadata, f"{arch}.rope.dimension_count")
         return (kv_lora_rank + rope_dims) * _F16_BYTES * block_count
 

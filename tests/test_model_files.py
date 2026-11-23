@@ -102,14 +102,35 @@ def test_shared_experts_count_as_dense():
     assert profile.expert_bytes_per_layer == [900]
 
 
-def test_latent_attention_models_use_compressed_kv_size():
-    metadata = {
-        "general.architecture": "deepseek2",
-        "deepseek2.block_count": 2,
-        "deepseek2.attention.kv_lora_rank": 512,
-        "deepseek2.rope.dimension_count": 64,
-    }
-    assert profile_model(metadata, []).kv_bytes_per_token_f16 == (512 + 64) * 2 * 2
+DEEPSEEK_V2_LITE = {
+    "general.architecture": "deepseek2",
+    "deepseek2.block_count": 2,
+    "deepseek2.attention.head_count": 16,
+    "deepseek2.attention.head_count_kv": 16,
+    "deepseek2.attention.key_length": 192,
+    "deepseek2.attention.value_length": 128,
+    "deepseek2.attention.kv_lora_rank": 512,
+    "deepseek2.rope.dimension_count": 64,
+}
+
+
+class _Tensor:
+    def __init__(self, name: str, size: int = 1):
+        self.name, self.size_bytes = name, size
+
+
+def test_latent_attention_with_split_tensors_uses_compressed_kv_size():
+    tensors = [_Tensor("blk.0.attn_k_b.weight"), _Tensor("blk.1.attn_k_b.weight")]
+    profile = profile_model(DEEPSEEK_V2_LITE, tensors)
+    assert profile.kv_bytes_per_token_f16 == (512 + 64) * 2 * 2
+
+
+def test_older_deepseek_files_without_split_tensors_use_full_kv_size():
+    # Regression: a DeepSeek-V2-Lite Q8_0 file failed to load because the plan
+    # assumed the compressed cache and filled the GPU with experts.
+    tensors = [_Tensor("blk.0.attn_kv_b.weight"), _Tensor("blk.1.attn_kv_b.weight")]
+    profile = profile_model(DEEPSEEK_V2_LITE, tensors)
+    assert profile.kv_bytes_per_token_f16 == 16 * (192 + 128) * 2 * 2
 
 
 def test_profile_requires_architecture():
