@@ -140,3 +140,26 @@ def test_agent_shop_endpoints(client):
     quest = test_client.post("/api/quests", json={"task": "hi", "agent_ids": [imported["id"]]})
     assert quest.status_code == 200
     assert test_client.post("/api/quests", json={"task": "hi", "agent_ids": []}).status_code == 400
+
+
+class FakeHubForFiles:
+    def list_gguf_files(self, repo_id):
+        from stronghouse.services.huggingface import RemoteFile
+
+        return [
+            RemoteFile("q4.gguf", 5 * GIB, None),
+            RemoteFile("big-00001-of-00002.gguf", 20 * GIB, None),
+            RemoteFile("big-00002-of-00002.gguf", 20 * GIB, None),
+        ]
+
+
+def test_hub_files_are_marked_with_whether_they_fit(client):
+    test_client, services = client
+    services.hub = FakeHubForFiles()
+    files = test_client.get("/api/hub/files", params={"repo_id": "owner/repo"}).json()
+    assert files == [
+        {"filename": "q4.gguf", "size_bytes": 5 * GIB, "fit": "gpu"},
+        {"filename": "big-00001-of-00002.gguf", "size_bytes": 40 * GIB, "fit": "too_big"},
+    ]
+    bad = test_client.get("/api/hub/search", params={"size": "enormous"})
+    assert bad.status_code == 422

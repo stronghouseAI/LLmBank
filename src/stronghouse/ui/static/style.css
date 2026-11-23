@@ -139,3 +139,13 @@ dialog::backdrop { background: rgb(0 0 0 / .5); }
   text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
 .warning { color: var(--accent); font-weight: 600; }
 #quest-skill-hint { margin-top: .5rem; }
+
+/* Discover filters */
+.filters { display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: flex-end; margin: -.4rem 0 1rem; }
+.filters label { margin: 0; }
+.filters select { width: auto; }
+.filters label.check { display: flex; align-items: center; gap: .35rem; color: var(--text); padding-bottom: .5rem; }
+.filters label.check input { width: auto; }
+.badge.fit-gpu { color: var(--ok); }
+.badge.fit-offload { color: var(--accent); }
+.badge.fit-too_big { color: var(--danger); }

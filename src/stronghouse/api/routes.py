@@ -11,6 +11,14 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from stronghouse.core.hub_filters import (
+    ModelKind,
+    SearchFilters,
+    SizeClass,
+    SortOrder,
+    combine_split_parts,
+    file_fit,
+)
 from stronghouse.core.models import KvCacheType, LibraryEntry, ModelProfile
 from stronghouse.core.offload_planner import plan_offload
 from stronghouse.services.engine import EngineError
@@ -143,13 +151,28 @@ async def chat(request: Request) -> StreamingResponse:
 
 
 @router.get("/hub/search")
-def hub_search(request: Request, q: str = "") -> list:
-    return _hub_call(lambda hub: hub.search_models(q), request)
+def hub_search(
+    request: Request,
+    q: str = "",
+    size: SizeClass = SizeClass.ANY,
+    kind: ModelKind = ModelKind.ANY,
+    moe: bool = False,
+    sort: SortOrder = SortOrder.DOWNLOADS,
+) -> list:
+    filters = SearchFilters(size=size, kind=kind, moe_only=moe, sort=sort)
+    return _hub_call(lambda hub: hub.search_models(q, filters), request)
 
 
 @router.get("/hub/files")
 def hub_files(request: Request, repo_id: str) -> list:
-    return _hub_call(lambda hub: hub.list_gguf_files(repo_id), request)
+    """GGUF files with split parts combined, each marked with whether it fits this machine."""
+    files = _hub_call(lambda hub: hub.list_gguf_files(repo_id), request)
+    hardware = request.app.state.services.probe_hardware()
+    combined = combine_split_parts([(f["filename"], f["size_bytes"]) for f in files])
+    return [
+        {"filename": name, "size_bytes": size, "fit": file_fit(size, hardware).value}
+        for name, size in combined
+    ]
 
 
 @router.post("/downloads")

@@ -38,9 +38,38 @@
 
     <!-- Discover: Hugging Face search and downloads -->
     <section id="tab-discover" class="panel">
-      <form id="hub-form" class="toolbar">
-        <input id="hub-query" type="search" placeholder="Search GGUF models on Hugging Face, e.g. qwen3 30b a3b">
-        <button type="submit">Search</button>
+      <form id="hub-form">
+        <div class="toolbar">
+          <input id="hub-query" type="search" placeholder="Search GGUF models on Hugging Face, e.g. qwen3 30b a3b">
+          <button type="submit">Search</button>
+        </div>
+        <div class="filters">
+          <label>Model size
+            <select id="hub-size">
+              <option value="any">Any size</option>
+              <option value="tiny">Tiny (under 4B)</option>
+              <option value="small">Small (4B to 9B)</option>
+              <option value="medium">Medium (9B to 20B)</option>
+              <option value="large">Large (20B to 40B)</option>
+              <option value="huge">Huge (over 40B)</option>
+            </select></label>
+          <label>Model type
+            <select id="hub-kind">
+              <option value="any">Any type</option>
+              <option value="text-generation">Chat and text</option>
+              <option value="image-text-to-text">Vision (sees images)</option>
+              <option value="feature-extraction">Embedding (for search)</option>
+            </select></label>
+          <label>Sort by
+            <select id="hub-sort">
+              <option value="downloads">Most downloaded</option>
+              <option value="likes">Most liked</option>
+              <option value="trendingScore">Trending</option>
+              <option value="lastModified">Recently updated</option>
+            </select></label>
+          <label class="check"><input id="hub-moe" type="checkbox"> MoE only</label>
+          <label class="check"><input id="hub-fits" type="checkbox" checked> Hide files too big for this computer</label>
+        </div>
       </form>
       <div class="split">
         <div id="hub-results" class="list"></div>
