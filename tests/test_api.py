@@ -60,6 +60,8 @@ def test_ui_is_served(client):
     response = test_client.get("/")
     assert response.status_code == 200
     assert "StronghouseAI" in response.text
+    # Always revalidated, so a git pull is picked up without a hard refresh.
+    assert test_client.get("/app.js").headers["cache-control"] == "no-cache"
 
 
 def test_hardware_and_library(client):
