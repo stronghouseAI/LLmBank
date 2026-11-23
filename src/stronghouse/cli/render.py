@@ -50,16 +50,11 @@ def table(headers: list[str], rows: list[list[str]]) -> str:
         for index, cell in enumerate(row):
             widths[index] = max(widths[index], _visible_len(cell))
     lines = [
-        "  ".join(
-            paint(h.upper(), "dim").ljust(_pad(h.upper(), w))
-            for h, w in zip(headers, widths, strict=True)
-        )
+        "  ".join(_cell(paint(h.upper(), "dim"), w) for h, w in zip(headers, widths, strict=True))
     ]
     for row in rows:
         lines.append(
-            "  ".join(
-                cell.ljust(_pad(cell, w)) for cell, w in zip(row, widths, strict=True)
-            ).rstrip()
+            "  ".join(_cell(cell, w) for cell, w in zip(row, widths, strict=True)).rstrip()
         )
     return "\n".join(lines)
 
@@ -82,6 +77,6 @@ def _visible_len(text: str) -> int:
     return length
 
 
-def _pad(text: str, width: int) -> int:
-    """ljust width that accounts for invisible colour codes."""
-    return width + len(text) - _visible_len(text)
+def _cell(text: str, width: int) -> str:
+    """Pad text to width visible characters; colour codes take no room on screen."""
+    return text + " " * max(0, width - _visible_len(text))

@@ -21,7 +21,7 @@ from stronghouse.core.hub_filters import (
 )
 from stronghouse.core.models import KvCacheType, LibraryEntry, ModelProfile
 from stronghouse.core.offload_planner import plan_offload
-from stronghouse.services.engine import EngineError
+from stronghouse.services.engine import EngineError, EngineState
 from stronghouse.services.gguf_reader import GgufFormatError
 from stronghouse.storage.archive import UnsafePathError
 
@@ -30,6 +30,10 @@ router = APIRouter(prefix="/api")
 
 DEFAULT_CONTEXT = 8192
 MAX_CONTEXT = 1_048_576
+LOADED_MODEL_NOTE = (
+    "A model is loaded and using GPU memory. Loading this one unloads it first,"
+    " so the real plan may put more on the GPU."
+)
 
 
 class PlanRequest(BaseModel):
@@ -94,6 +98,8 @@ def make_plan(entry_id: int, body: PlanRequest, request: Request) -> dict:
     services = request.app.state.services
     entry = _entry(request, entry_id)
     plan = _plan_for(request, entry_id, body)
+    if services.engine.status().state is not EngineState.STOPPED:
+        plan = replace(plan, notes=[*plan.notes, LOADED_MODEL_NOTE])
     command = services.engine_command_preview(Path(entry.path), plan)
     return {"plan": asdict(plan), "command": command}
 
@@ -102,6 +108,7 @@ def make_plan(entry_id: int, body: PlanRequest, request: Request) -> dict:
 def start_engine(body: StartRequest, request: Request) -> dict:
     services = request.app.state.services
     entry = _entry(request, body.model_id)
+    services.engine.stop()  # free its GPU memory first, or the plan sees a full GPU
     plan = _plan_for(request, body.model_id, body)
     try:
         return asdict(services.engine.start(Path(entry.path), plan))

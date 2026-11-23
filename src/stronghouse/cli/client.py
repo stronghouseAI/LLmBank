@@ -77,6 +77,12 @@ def connect(settings: Settings, start_if_needed: bool = True) -> ApiClient:
     raise ApiError(f"StronghouseAI did not start. See {log_path(settings)}")
 
 
+def app_is_running(settings: Settings) -> bool:
+    """Whether StronghouseAI already answers on its port (started by shai or another terminal)."""
+    with httpx.Client(base_url=f"http://{settings.host}:{settings.port}") as http:
+        return _is_up(http)
+
+
 def stop_background_server(settings: Settings) -> bool:
     """Stop an app the terminal client started. Returns False if none was running."""
     pid_file = pid_path(settings)

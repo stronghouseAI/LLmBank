@@ -83,9 +83,9 @@ def vault_plan(api: ApiClient, args: argparse.Namespace) -> None:
 
 def vault_load(api: ApiClient, args: argparse.Namespace) -> None:
     entry = _find_model(api, args.model)
-    plan = api.post(f"/library/{entry['id']}/plan", _plan_body(args))
-    _print_plan(entry, plan["plan"], plan["command"])
-    api.post("/engine/start", {**_plan_body(args), "model_id": entry["id"]})
+    # The server unloads the current model before planning, so print the plan it used.
+    started = api.post("/engine/start", {**_plan_body(args), "model_id": entry["id"]})
+    _print_plan(entry, started["plan"], started["command"])
     print(paint("Loading", "yellow") + " (big models take a minute)", end="", flush=True)
     deadline = time.monotonic() + LOAD_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
@@ -204,9 +204,14 @@ def ask(api: ApiClient, args: argparse.Namespace) -> None:
 def chat(api: ApiClient, args: argparse.Namespace) -> None:
     print(paint("Chat with the loaded model. /clear starts over, /exit or Ctrl+D quits.", "dim"))
     messages: list[dict] = []
+    first = " ".join(args.prompt).strip()  # `shai chat how are you` opens with that message
     while True:
         try:
-            text = prompt_user(paint("you> ", "brass")).strip()
+            if first:
+                text, first = first, ""
+                print(paint("you> ", "brass") + text)
+            else:
+                text = prompt_user(paint("you> ", "brass")).strip()
         except EOFError:
             print()
             return
@@ -370,9 +375,9 @@ def _find_model(api: ApiClient, query: str) -> dict:
     if query.isdigit():
         match = [e for e in entries if e["id"] == int(query)]
     else:
-        needle = query.lower()
+        needle = _loose(query)
         match = [
-            e for e in entries if needle in e["filename"].lower() or needle in e["repo_id"].lower()
+            e for e in entries if needle in _loose(e["filename"]) or needle in _loose(e["repo_id"])
         ]
     if len(match) == 1:
         return match[0]
@@ -380,6 +385,11 @@ def _find_model(api: ApiClient, query: str) -> dict:
         raise ApiError(f'No model in your vault matches "{query}". List them with: shai vault ls')
     names = "\n".join(f"  {e['id']}  {e['filename']}" for e in match)
     raise ApiError(f'"{query}" matches several models. Use the id:\n{names}')
+
+
+def _loose(name: str) -> str:
+    """Lower case without separators, so qwen3_8b, Qwen3-8B and "qwen3 8b" all match."""
+    return "".join(char for char in name.lower() if char.isalnum())
 
 
 def _find_agent(api: ApiClient, query: str) -> dict:
@@ -500,8 +510,9 @@ def build_parser() -> argparse.ArgumentParser:
         ("ask", ask, "ask one question"),
     ):
         sub = commands.add_parser(name, help=text)
-        if name == "ask":
-            sub.add_argument("prompt", nargs="+")
+        sub.add_argument(
+            "prompt", nargs="+" if name == "ask" else "*", help="your message (optional for chat)"
+        )
         sub.add_argument(
             "--no-think", action="store_true", help="answer directly, skip thinking (Qwen3)"
         )
