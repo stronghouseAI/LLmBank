@@ -149,3 +149,10 @@ dialog::backdrop { background: rgb(0 0 0 / .5); }
 .badge.fit-gpu { color: var(--ok); }
 .badge.fit-offload { color: var(--accent); }
 .badge.fit-too_big { color: var(--danger); }
+
+/* Thinking spinner: shown while the model works, so a slow answer does not look frozen */
+.thinking { display: inline-flex; align-items: center; gap: .5rem; color: var(--muted); font-size: .9rem; }
+.spinner { width: 14px; height: 14px; border-radius: 50%; flex: none;
+  border: 2px solid var(--border); border-top-color: var(--accent); animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }

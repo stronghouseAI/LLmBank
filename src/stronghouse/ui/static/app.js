@@ -322,10 +322,25 @@ function addMessage(role, text) {
   return el;
 }
 
+// Shown until the first words of the answer arrive. Reasoning models (Qwen3,
+// DeepSeek R1) can think for a minute before answering, which otherwise looks frozen.
+function showThinking(bubble) {
+  const started = Date.now();
+  bubble.innerHTML = '<span class="thinking"><span class="spinner" aria-hidden="true"></span><span class="label">Thinking… 0s</span></span>';
+  const label = bubble.querySelector(".label");
+  const timer = setInterval(() => {
+    label.textContent = `Thinking… ${Math.round((Date.now() - started) / 1000)}s`;
+  }, 1000);
+  return () => clearInterval(timer);
+}
+
 async function sendChat(text) {
   chatHistory.push({ role: "user", content: text });
   addMessage("user", text);
-  const bubble = addMessage("assistant", "…");
+  const bubble = addMessage("assistant", "");
+  const stopThinking = showThinking(bubble);
+  const send = $("#chat-form button[type=submit]");
+  send.disabled = true;
   let reply = "";
   try {
     const response = await fetch("/api/chat", {
@@ -349,13 +364,22 @@ async function sendChat(text) {
       for (const line of lines) {
         if (!line.startsWith("data: ") || line.includes("[DONE]")) continue;
         const delta = JSON.parse(line.slice(6)).choices?.[0]?.delta?.content;
-        if (delta) { reply += delta; bubble.textContent = reply; }
+        if (delta) {
+          if (!reply) stopThinking();
+          reply += delta;
+          bubble.textContent = reply;
+        }
       }
     }
+    stopThinking();
+    if (!reply) bubble.textContent = "(The model sent an empty answer.)";
     chatHistory.push({ role: "assistant", content: reply });
   } catch (error) {
+    stopThinking();
     bubble.textContent = `Error: ${error.message}`;
     chatHistory.pop();
+  } finally {
+    send.disabled = false;
   }
 }
 
