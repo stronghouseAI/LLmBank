@@ -152,6 +152,8 @@ $("#hub-results").addEventListener("click", async (event) => {
 $("#hub-files").addEventListener("click", async (event) => {
   const button = event.target.closest("[data-download]");
   if (!button) return;
+  button.disabled = true;
+  button.textContent = "Archiving…";
   await withErrors(() => api("/downloads", {
     method: "POST", body: { repo_id: button.dataset.repo, filename: button.dataset.download },
   }));

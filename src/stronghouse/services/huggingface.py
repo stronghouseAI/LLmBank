@@ -130,6 +130,10 @@ class HuggingFaceClient:
                 kept after a network failure (to resume) but deleted on a bad checksum.
         """
         destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.exists() and destination.stat().st_size == remote.size_bytes:
+            digest = sha256_of(destination)
+            if not remote.sha256 or digest == remote.sha256:
+                return digest  # already archived and intact; nothing to download
         partial = destination.with_name(destination.name + ".part")
         done = partial.stat().st_size if partial.exists() else 0
         total = remote.size_bytes

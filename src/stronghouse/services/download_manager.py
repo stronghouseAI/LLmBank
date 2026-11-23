@@ -27,6 +27,9 @@ class JobState(StrEnum):
     FAILED = "failed"
 
 
+_ACTIVE_STATES = (JobState.QUEUED, JobState.DOWNLOADING, JobState.VERIFYING)
+
+
 @dataclass(frozen=True)
 class DownloadJob:
     id: int
@@ -61,6 +64,13 @@ class DownloadManager:
             archive.UnsafePathError: if the repo id or filename is not safe to store.
         """
         archive.file_path(self._archive_dir, repo_id, filename)  # validate early
+        with self._lock:
+            # Two jobs writing the same .part file corrupt each other, so a second
+            # click on the same file joins the job that is already running.
+            for existing in self._jobs.values():
+                same_file = (existing.repo_id, existing.filename) == (repo_id, filename)
+                if same_file and existing.state in _ACTIVE_STATES:
+                    return existing
         job = DownloadJob(
             id=next(self._ids), repo_id=repo_id, filename=filename, state=JobState.QUEUED
         )
