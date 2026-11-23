@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>StronghouseAI</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+        <path d="M4 28V10l4-3 4 3V6l4-3 4 3v4l4-3 4 3v18z" fill="none" stroke="currentColor" stroke-width="2"/>
+        <rect x="13" y="18" width="6" height="10" rx="3" fill="currentColor"/>
+      </svg>
+      <span>Stronghouse<strong>AI</strong></span>
+    </div>
+    <nav class="tabs" role="tablist">
+      <button data-tab="library" class="active">Vault</button>
+      <button data-tab="discover">Discover</button>
+      <button data-tab="run">Run</button>
+      <button data-tab="chat">Chat</button>
+      <button data-tab="system">System</button>
+    </nav>
+    <div id="engine-pill" class="pill">engine: …</div>
+  </header>
+
+  <main>
+    <!-- Vault: the local archive -->
+    <section id="tab-library" class="panel active">
+      <div class="toolbar">
+        <input id="library-search" type="search" placeholder="Search your vault (name, repo, tag)">
+        <button id="library-rescan" class="secondary">Rescan archive folder</button>
+      </div>
+      <div id="library-list" class="cards"></div>
+    </section>
+
+    <!-- Discover: Hugging Face search and downloads -->
+    <section id="tab-discover" class="panel">
+      <form id="hub-form" class="toolbar">
+        <input id="hub-query" type="search" placeholder="Search GGUF models on Hugging Face, e.g. qwen3 30b a3b">
+        <button type="submit">Search</button>
+      </form>
+      <div class="split">
+        <div id="hub-results" class="list"></div>
+        <div id="hub-files" class="list"></div>
+      </div>
+      <h3>Downloads</h3>
+      <div id="download-list" class="list"></div>
+    </section>
+
+    <!-- Run: offload planner, launch, speed test -->
+    <section id="tab-run" class="panel">
+      <div class="grid-2">
+        <div class="box">
+          <h3>Model</h3>
+          <select id="run-model"></select>
+          <div id="run-profile" class="muted"></div>
+          <h3>Settings</h3>
+          <label>Context length <input id="run-context" type="number" value="8192" min="512" step="512"></label>
+          <label>KV cache
+            <select id="run-kv"><option value="f16">f16 (default)</option><option value="q8_0">q8_0 (half the memory)</option></select>
+          </label>
+          <details>
+            <summary>Manual overrides</summary>
+            <label>Experts on CPU (--n-cpu-moe) <input id="run-ncpumoe" type="number" min="0" placeholder="auto"></label>
+            <label>GPU layers (--n-gpu-layers) <input id="run-ngl" type="number" min="0" placeholder="auto"></label>
+          </details>
+          <div class="row">
+            <button id="run-plan" class="secondary">Auto-fit</button>
+            <button id="run-start">Load model</button>
+            <button id="run-stop" class="danger">Unload</button>
+          </div>
+        </div>
+        <div class="box">
+          <h3>Plan</h3>
+          <div id="run-plan-view" class="muted">Pick a model and press Auto-fit.</div>
+          <h3>Speed test</h3>
+          <button id="run-bench" class="secondary">Run speed test</button>
+          <div id="run-bench-view" class="muted"></div>
+          <h3>Engine log</h3>
+          <pre id="run-log" class="log"></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Chat -->
+    <section id="tab-chat" class="panel">
+      <div id="chat-log" class="chat-log"></div>
+      <form id="chat-form" class="chat-form">
+        <textarea id="chat-input" rows="2" placeholder="Message the loaded model (Enter to send, Shift+Enter for a new line)"></textarea>
+        <button type="submit">Send</button>
+        <button type="button" id="chat-clear" class="secondary">Clear</button>
+      </form>
+    </section>
+
+    <!-- System -->
+    <section id="tab-system" class="panel">
+      <div id="system-view" class="box"></div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>
