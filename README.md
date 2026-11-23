@@ -20,7 +20,7 @@ Inference itself is done by [llama.cpp](https://github.com/ggml-org/llama.cpp)'s
 ## Features (v0.1)
 
 - **Vault**: browse, search and tag the models on your disk; rescan any archive folder (e.g. an external drive).
-- **Discover**: search GGUF models on Hugging Face and archive them. Split models (`-00001-of-0000N`) download all parts.
+- **Discover**: search GGUF models on Hugging Face and archive them. Filter by model size, type (chat, vision, embedding) and MoE, and sort by downloads, likes, trending or date. Every file is marked *fits in GPU*, *GPU + RAM* or *too big* for your computer. Split models (`-00001-of-0000N`) download all parts.
 - **Run**: Auto-fit plans GPU/CPU placement (`--n-cpu-moe`, `--n-gpu-layers`, context, KV cache type), shows the exact command, loads the model and runs a speed test. Manual overrides are there for fine-tuning.
 - **Chat**: talk to the loaded model.
 - **OpenAI-compatible endpoint**: while a model is loaded, `http://127.0.0.1:8766/v1` works with Open WebUI and other tools.

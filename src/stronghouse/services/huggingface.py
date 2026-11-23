@@ -15,9 +15,24 @@ from urllib.parse import quote
 
 import httpx
 
+from stronghouse.core.hub_filters import (
+    ModelKind,
+    SearchFilters,
+    looks_like_moe,
+    matches,
+    parameters_from_name,
+    size_class,
+    size_label,
+)
+
 log = logging.getLogger(__name__)
 
 SEARCH_LIMIT = 30
+# When size or MoE filters are on, fetch more so enough results survive them.
+FILTERED_FETCH_LIMIT = 200
+# Ask the hub for the GGUF summary (parameter count, architecture) too. The listed
+# fields must be named again, because expand replaces the default field set.
+_SEARCH_FIELDS = ("downloads", "likes", "lastModified", "tags", "pipeline_tag", "gguf")
 CHUNK_BYTES = 4 * 1024 * 1024
 HASH_CHUNK_BYTES = 16 * 1024 * 1024
 REQUEST_TIMEOUT = httpx.Timeout(30.0, read=120.0)
@@ -36,6 +51,11 @@ class RemoteModel:
     likes: int
     last_modified: str | None
     tags: list[str]
+    parameters: int | None = None
+    size_label: str = ""
+    architecture: str | None = None
+    kind: str | None = None  # Hugging Face pipeline tag, e.g. text-generation
+    is_moe: bool = False
 
 
 @dataclass(frozen=True)
@@ -57,23 +77,34 @@ class HuggingFaceClient:
         if http is not None:
             self._http.headers.update(headers)
 
-    def search_models(self, query: str, limit: int = SEARCH_LIMIT) -> list[RemoteModel]:
-        """Search GGUF repos, most downloaded first."""
+    def search_models(
+        self, query: str, filters: SearchFilters | None = None, limit: int = SEARCH_LIMIT
+    ) -> list[RemoteModel]:
+        """Search GGUF repos, filtered and sorted as asked (most downloaded first by default)."""
+        filters = filters or SearchFilters()
+        params: dict = {
+            "search": query,
+            "filter": "gguf",
+            "sort": filters.sort.value,
+            "direction": "-1",
+            "limit": FILTERED_FETCH_LIMIT if filters.filters_after_fetch else limit,
+        }
+        if filters.kind is not ModelKind.ANY:
+            params["pipeline_tag"] = filters.kind.value
         response = self._http.get(
-            f"{self._base_url}/api/models",
-            params={"search": query, "filter": "gguf", "sort": "downloads", "limit": limit},
+            f"{self._base_url}/api/models", params={**params, "expand[]": list(_SEARCH_FIELDS)}
         )
+        if response.status_code == 400:  # the hub refused the extra fields; search without them
+            log.warning("hub search without expanded fields", extra={"status": 400})
+            response = self._http.get(f"{self._base_url}/api/models", params=params)
         response.raise_for_status()
-        return [
-            RemoteModel(
-                repo_id=item["id"],
-                downloads=item.get("downloads", 0),
-                likes=item.get("likes", 0),
-                last_modified=item.get("lastModified"),
-                tags=item.get("tags", []),
-            )
-            for item in response.json()
+        models = [_remote_model(item) for item in response.json()]
+        kept = [
+            model
+            for model in models
+            if matches(filters, size_class(model.parameters), model.is_moe)
         ]
+        return kept[:limit]
 
     def list_gguf_files(self, repo_id: str) -> list[RemoteFile]:
         """All .gguf files in a repo (including subfolders) with size and sha256."""
@@ -182,3 +213,22 @@ def sha256_of(path: Path) -> str:
         while chunk := stream.read(HASH_CHUNK_BYTES):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _remote_model(item: dict) -> RemoteModel:
+    gguf = item.get("gguf") or {}
+    tags = item.get("tags", [])
+    parameters = gguf.get("total") or parameters_from_name(item["id"])
+    architecture = gguf.get("architecture")
+    return RemoteModel(
+        repo_id=item["id"],
+        downloads=item.get("downloads", 0),
+        likes=item.get("likes", 0),
+        last_modified=item.get("lastModified"),
+        tags=tags,
+        parameters=parameters,
+        size_label=size_label(parameters),
+        architecture=architecture,
+        kind=item.get("pipeline_tag"),
+        is_moe=looks_like_moe(item["id"], architecture, tags),
+    )

@@ -119,18 +119,60 @@ $("#library-rescan").addEventListener("click", async () => {
 
 // ---------- discover (Hugging Face) ----------
 
-$("#hub-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const query = encodeURIComponent($("#hub-query").value);
+const KIND_NAMES = { "text-generation": "chat", "image-text-to-text": "vision", "feature-extraction": "embedding" };
+const FIT_NAMES = {
+  gpu: ["fits in GPU", "The whole file fits in graphics memory: fastest."],
+  offload: ["GPU + RAM", "Runs with part of it in system RAM (MoE offload helps here)."],
+  too_big: ["too big", "Larger than graphics memory and RAM together."],
+};
+let hubFiles = { repo: null, files: [] };
+
+function hubSearchParams() {
+  const params = new URLSearchParams({
+    q: $("#hub-query").value,
+    size: $("#hub-size").value,
+    kind: $("#hub-kind").value,
+    sort: $("#hub-sort").value,
+  });
+  if ($("#hub-moe").checked) params.set("moe", "true");
+  return params;
+}
+
+async function searchHub() {
   $("#hub-results").innerHTML = '<p class="muted">Searching…</p>';
-  const models = await withErrors(() => api(`/hub/search?q=${query}`));
+  const models = await withErrors(() => api(`/hub/search?${hubSearchParams()}`));
   if (!models) { $("#hub-results").innerHTML = ""; return; }
   $("#hub-results").innerHTML = models.map((model) => `
     <div class="item selectable" data-repo="${escapeHtml(model.repo_id)}">
-      <span class="name">${escapeHtml(model.repo_id)}</span>
+      <span><span class="name">${escapeHtml(model.repo_id)}</span><br>
+        ${model.size_label ? `<span class="badge">${escapeHtml(model.size_label)}</span>` : ""}
+        ${model.is_moe ? '<span class="badge moe">MoE</span>' : ""}
+        ${KIND_NAMES[model.kind] ? `<span class="badge">${KIND_NAMES[model.kind]}</span>` : ""}</span>
       <span class="muted">${model.downloads.toLocaleString()} ↓</span>
-    </div>`).join("") || '<p class="muted">No GGUF models found.</p>';
-});
+    </div>`).join("") || '<p class="muted">No GGUF models match. Try fewer filters.</p>';
+}
+
+function renderHubFiles() {
+  const { repo, files } = hubFiles;
+  if (!repo) return;
+  const hideTooBig = $("#hub-fits").checked;
+  const visible = files.filter((f) => !(hideTooBig && f.fit === "too_big"));
+  const hidden = files.length - visible.length;
+  $("#hub-files").innerHTML = visible.map((file) => `
+    <div class="item">
+      <span><span class="name">${escapeHtml(file.filename)}</span><br>
+        <span class="badge fit-${file.fit}" title="${FIT_NAMES[file.fit][1]}">${FIT_NAMES[file.fit][0]}</span></span>
+      <span>${formatBytes(file.size_bytes)}
+        <button data-download="${escapeHtml(file.filename)}" data-repo="${escapeHtml(repo)}">Archive</button></span>
+    </div>`).join("")
+    + (hidden ? `<p class="muted">${hidden} file(s) too big for this computer are hidden.</p>` : "")
+    || '<p class="muted">No .gguf files in this repo.</p>';
+}
+
+$("#hub-form").addEventListener("submit", (event) => { event.preventDefault(); searchHub(); });
+["#hub-size", "#hub-kind", "#hub-sort", "#hub-moe"].forEach((sel) =>
+  $(sel).addEventListener("change", () => { if ($("#hub-query").value || $("#hub-results").children.length) searchHub(); }));
+$("#hub-fits").addEventListener("change", renderHubFiles);
 
 $("#hub-results").addEventListener("click", async (event) => {
   const row = event.target.closest("[data-repo]");
@@ -139,14 +181,8 @@ $("#hub-results").addEventListener("click", async (event) => {
   $("#hub-files").innerHTML = '<p class="muted">Loading files…</p>';
   const files = await withErrors(() => api(`/hub/files?repo_id=${encodeURIComponent(repo)}`));
   if (!files) { $("#hub-files").innerHTML = ""; return; }
-  // Show only the first part of split models; downloading it fetches every part.
-  const visible = files.filter((f) => !/-000(0[2-9]|[1-9]\d)-of-\d{5}\.gguf$/.test(f.filename));
-  $("#hub-files").innerHTML = visible.map((file) => `
-    <div class="item">
-      <span class="name">${escapeHtml(file.filename)}</span>
-      <span>${formatBytes(file.size_bytes)}
-        <button data-download="${escapeHtml(file.filename)}" data-repo="${escapeHtml(repo)}">Archive</button></span>
-    </div>`).join("") || '<p class="muted">No .gguf files in this repo.</p>';
+  hubFiles = { repo, files };
+  renderHubFiles();
 });
 
 $("#hub-files").addEventListener("click", async (event) => {
