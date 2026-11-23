@@ -137,8 +137,12 @@ def max_steps_for(agent: Agent) -> int:
     return 2 + agent.diligence * 2
 
 
-def system_prompt_for(agent: Agent, journal: list[str]) -> str:
-    """Turn the character sheet and recent journal notes into model instructions."""
+def system_prompt_for(agent: Agent, journal: list[str], home_folder: str) -> str:
+    """Turn the character sheet and recent journal notes into model instructions.
+
+    home_folder is stated explicitly because models otherwise guess paths like
+    "/Downloads" for "my downloads folder" and waste an approval on a wrong path.
+    """
     lines = [
         f"You are {agent.name}, a level {agent.level} {agent.agent_class.value}.",
         CLASS_DESCRIPTIONS[agent.agent_class],
@@ -147,6 +151,8 @@ def system_prompt_for(agent: Agent, journal: list[str]) -> str:
         lines.append(f"Personality: {agent.personality.strip()}")
     lines += [
         "You work for the user on their own computer, running a local model.",
+        f"The user's home folder is {home_folder}. Always use full paths starting with "
+        f"{home_folder}, e.g. {home_folder}/Downloads for their downloads folder.",
         "Use your tools when they help. Every action on the computer is shown to the user, "
         "who approves or denies it. If an action is denied, find another way or explain.",
         "When the task is done, reply with a clear final answer and no tool calls.",

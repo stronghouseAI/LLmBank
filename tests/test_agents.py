@@ -84,10 +84,11 @@ def test_invalid_character_sheets_are_rejected(changes, message):
 
 
 def test_system_prompt_includes_identity_and_journal():
-    prompt = system_prompt_for(make_agent(), ["The user's projects live in ~/code"])
+    prompt = system_prompt_for(make_agent(), ["The user's projects live in ~/code"], "/home/phil")
     assert "You are Mira" in prompt
     assert "scout" in prompt
     assert "~/code" in prompt
+    assert "/home/phil/Downloads" in prompt  # so agents stop guessing "/Downloads"
 
 
 def test_agent_card_round_trip_drops_unknown_skills():

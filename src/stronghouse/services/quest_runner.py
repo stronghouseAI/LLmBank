@@ -12,6 +12,7 @@ import json
 import logging
 import threading
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Protocol
 
 import httpx
@@ -177,7 +178,7 @@ class QuestRunner:
     def _opening_messages(self, agent: Agent, task: str) -> list[dict]:
         notes = [entry["note"] for entry in self._store.journal(agent.id)]
         return [
-            {"role": "system", "content": system_prompt_for(agent, notes)},
+            {"role": "system", "content": system_prompt_for(agent, notes, str(Path.home()))},
             {"role": "user", "content": task},
         ]
 
