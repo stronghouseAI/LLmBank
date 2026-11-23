@@ -264,7 +264,9 @@ function renderQuest(quest) {
   const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
   log.innerHTML = quest.steps.map((s) => `
     <div class="step ${escapeHtml(s.kind)}"><span class="who">${escapeHtml(s.agent_name)}</span>${escapeHtml(s.text)}</div>`).join("")
-    + (quest.result && quest.state === "done" ? `<div class="step review"><span class="who">Result</span>${escapeHtml(quest.result)}</div>` : "");
+    + (quest.result && quest.state === "done" ? `<div class="step review"><span class="who">Result</span>${escapeHtml(quest.result)}</div>` : "")
+    + (quest.state === "running"
+      ? '<div class="thinking"><span class="spinner" aria-hidden="true"></span>Working on it…</div>' : "");
   if (atBottom) log.scrollTop = log.scrollHeight;
 
   const box = $("#quest-approval");
