@@ -106,3 +106,32 @@ code { font-family: var(--mono); font-size: .8rem; word-break: break-all; }
 
 .toast { position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%); background: var(--text);
   color: var(--bg); padding: .6rem 1rem; border-radius: 8px; max-width: 90vw; }
+
+/* Guild (Agent shop) */
+.row.tight { margin-top: 0; }
+.row .grow { flex: 1; }
+.row .narrow { width: 110px; }
+.file-button { display: inline-block; margin: 0; padding: .5rem .9rem; border-radius: 8px; cursor: pointer;
+  background: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
+.portrait { font-size: 2rem; line-height: 1; }
+.agent-head { display: flex; gap: .7rem; align-items: center; }
+.xp { height: 5px; background: var(--surface-2); border-radius: 3px; margin-top: .4rem; overflow: hidden; }
+.xp > div { height: 100%; background: var(--accent); }
+.skill-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .4rem; }
+.skill-grid label { display: flex; gap: .4rem; align-items: flex-start; margin: 0; padding: .45rem;
+  border: 1px solid var(--border); border-radius: 8px; color: var(--text); }
+.skill-grid input { width: auto; margin-top: .2rem; }
+.skill-grid small { color: var(--muted); display: block; }
+input[type="range"], input[type="checkbox"] { padding: 0; accent-color: var(--accent); }
+.quest-log { display: flex; flex-direction: column; gap: .35rem; max-height: 420px; overflow: auto; }
+.step { font-size: .88rem; padding: .4rem .55rem; border-radius: 6px; background: var(--surface-2); white-space: pre-wrap; word-break: break-word; }
+.step .who { font-weight: 600; margin-right: .35rem; }
+.step.tool_call { border-left: 3px solid var(--accent); }
+.step.tool_result { font-family: var(--mono); font-size: .75rem; max-height: 180px; overflow: auto; }
+.step.error { color: var(--danger); }
+.step.review { border-left: 3px solid var(--ok); }
+.approval-box { border: 2px solid var(--accent); border-radius: var(--radius); padding: .8rem; margin-bottom: .8rem; }
+.approval-box pre { font-family: var(--mono); font-size: .8rem; white-space: pre-wrap; max-height: 220px; overflow: auto;
+  background: var(--surface-2); padding: .5rem; border-radius: 6px; }
+dialog { color: var(--text); max-width: 560px; width: 92vw; }
+dialog::backdrop { background: rgb(0 0 0 / .5); }

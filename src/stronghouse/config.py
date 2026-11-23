@@ -33,6 +33,10 @@ class Settings:
     def database_path(self) -> Path:
         return self.data_dir / "library.sqlite3"
 
+    @property
+    def agents_database_path(self) -> Path:
+        return self.data_dir / "agents.sqlite3"
+
 
 def load_settings(environ: dict[str, str] | None = None) -> Settings:
     """Build Settings from the environment, falling back to sensible defaults.

@@ -10,6 +10,10 @@ large expert weights run from system RAM. Its second job is **archiving**:
 downloads are resumable, checksum-verified, and stored with their model card,
 license and engine version so they still work years from now without internet.
 
+Its third part is the **Agent shop**: create agents like RPG characters and let
+them do tasks on your computer with the local model, asking your permission for
+every action.
+
 Inference itself is done by [llama.cpp](https://github.com/ggml-org/llama.cpp)'s
 `llama-server`, which StronghouseAI starts and controls.
 
@@ -20,6 +24,7 @@ Inference itself is done by [llama.cpp](https://github.com/ggml-org/llama.cpp)'s
 - **Run**: Auto-fit plans GPU/CPU placement (`--n-cpu-moe`, `--n-gpu-layers`, context, KV cache type), shows the exact command, loads the model and runs a speed test. Manual overrides are there for fine-tuning.
 - **Chat**: talk to the loaded model.
 - **OpenAI-compatible endpoint**: while a model is loaded, `http://127.0.0.1:8766/v1` works with Open WebUI and other tools.
+- **Guild (Agent shop)**: create agents like RPG characters (name, portrait, class, personality, up to 5 skills, Creativity and Diligence stats), recruit starter agents, and send them on quests using the loaded model. Every action on your computer (reading, writing, searching files, running commands) waits for your **Allow once** or **Deny**. Pair an agent with a reviewer for a team of two. Agents keep a journal between quests and can be exported and imported as `.agent.json` cards.
 - **System**: GPU, RAM, CPU and engine version.
 
 ## Install (Arch / Omarchy)

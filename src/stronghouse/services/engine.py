@@ -16,6 +16,7 @@ from pathlib import Path
 
 import httpx
 
+from stronghouse.core.agents import ModelTurn, ToolCall
 from stronghouse.core.launch_args import build_server_args
 from stronghouse.core.models import LaunchPlan
 
@@ -156,6 +157,32 @@ class EngineController:
             generated_tokens_per_second=round(timings.get("predicted_per_second", 0.0), 2),
             generated_tokens=timings.get("predicted_n", 0),
         )
+
+    def complete_chat(
+        self, messages: list[dict], tools: list[dict], temperature: float
+    ) -> ModelTurn:
+        """One non-streaming chat turn with tool definitions, for agents.
+
+        Raises:
+            EngineError: if no model is ready.
+            httpx.HTTPError: if the engine fails mid-request.
+        """
+        self._require_ready()
+        payload: dict = {"messages": messages, "temperature": temperature}
+        if tools:
+            payload["tools"] = tools
+        response = self._http.post(f"{self.base_url}/v1/chat/completions", json=payload)
+        response.raise_for_status()
+        message = response.json()["choices"][0]["message"]
+        calls = [
+            ToolCall(
+                id=call.get("id") or f"call_{index}",
+                name=call["function"]["name"],
+                arguments=call["function"].get("arguments") or "{}",
+            )
+            for index, call in enumerate(message.get("tool_calls") or [])
+        ]
+        return ModelTurn(content=message.get("content") or "", tool_calls=calls)
 
     def stream_chat(self, payload: dict) -> Iterator[bytes]:
         """Forward an OpenAI-style chat request and stream the raw SSE bytes back."""

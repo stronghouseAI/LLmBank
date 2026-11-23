@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import sqlite3
 import threading
-from importlib import resources
 from pathlib import Path
 
 from stronghouse.core.models import LibraryEntry
+from stronghouse.storage.sqlite_db import open_database
 
 _MIGRATIONS_PACKAGE = "stronghouse.storage.migrations"
 _TAG_SEPARATOR = ","
@@ -17,11 +17,8 @@ class LibraryStore:
     """Read and write library entries. Thread-safe for the app's small workload."""
 
     def __init__(self, database_path: Path) -> None:
-        database_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self._connection = sqlite3.connect(database_path, check_same_thread=False)
-        self._connection.row_factory = sqlite3.Row
-        self._apply_migrations()
+        self._connection = open_database(database_path, _MIGRATIONS_PACKAGE)
 
     def upsert(self, entry: LibraryEntry) -> LibraryEntry:
         """Add a model, or update it if a model with the same path exists."""
@@ -83,31 +80,6 @@ class LibraryStore:
 
     def close(self) -> None:
         self._connection.close()
-
-    def _apply_migrations(self) -> None:
-        with self._lock, self._connection:
-            self._connection.execute(
-                "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)"
-            )
-            applied = {
-                row[0] for row in self._connection.execute("SELECT version FROM schema_migrations")
-            }
-        for version, sql in _migration_scripts():
-            if version in applied:
-                continue
-            with self._lock:
-                # executescript commits on its own, so record the version in the same script.
-                self._connection.executescript(
-                    f"BEGIN;\n{sql}\nINSERT INTO schema_migrations VALUES ({version});\nCOMMIT;"
-                )
-
-
-def _migration_scripts() -> list[tuple[int, str]]:
-    scripts = []
-    for item in resources.files(_MIGRATIONS_PACKAGE).iterdir():
-        if item.name.endswith(".sql"):
-            scripts.append((int(item.name.split("_", 1)[0]), item.read_text(encoding="utf-8")))
-    return sorted(scripts)
 
 
 def _to_entry(row: sqlite3.Row) -> LibraryEntry:
