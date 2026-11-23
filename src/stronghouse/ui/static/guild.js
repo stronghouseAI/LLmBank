@@ -26,7 +26,7 @@ document.querySelector('.tabs button[data-tab="guild"]').addEventListener("click
 async function loadAgents() {
   guild.agents = (await withErrors(() => api("/agents"))) || [];
   $("#agent-list").innerHTML = guild.agents.map(agentCard).join("")
-    || '<p class="muted">No agents yet. Create one or recruit a starter below.</p>';
+    || '<p class="muted">No agents yet. Press Create agent and give it the skills it needs.</p>';
   const options = guild.agents.map((a) => `<option value="${a.id}">${escapeHtml(a.portrait)} ${escapeHtml(a.name)}</option>`).join("");
   const [worker, reviewer] = [$("#quest-worker").value, $("#quest-reviewer").value];
   $("#quest-worker").innerHTML = options;
@@ -55,9 +55,9 @@ function updateQuestHint() {
     return;
   }
   const able = guild.agents.filter((a) => missing.skills.some((s) => a.skills.includes(s))).map((a) => a.name);
-  const suggestion = able.length ? `Pick ${escapeHtml(able.join(" or "))}` : "Recruit Herald or edit an agent";
+  const suggestion = able.length ? `Pick ${escapeHtml(able.join(" or "))}, or press` : "Press";
   hint.innerHTML = `<span class="warning">⚠ ${escapeHtml(agent.name)} has no ${escapeHtml(missing.label)} skill for this task
-    (can: ${escapeHtml(skills)}). ${suggestion}, or press Edit to add it.</span>`;
+    (can: ${escapeHtml(skills)}). ${suggestion} Edit to add it.</span>`;
 }
 
 $("#quest-worker").addEventListener("change", updateQuestHint);
@@ -70,7 +70,7 @@ function agentCard(agent) {
       <div class="agent-head">
         <span class="portrait">${escapeHtml(agent.portrait || "👤")}</span>
         <div><h4>${escapeHtml(agent.name)}</h4>
-          <div class="meta">Level ${agent.level} ${escapeHtml(agent.agent_class)} · ${agent.xp} XP</div></div>
+          <div class="meta">Level ${agent.level} · ${agent.xp} XP</div></div>
       </div>
       <div class="xp"><div style="width:${(xpIntoLevel / 50) * 100}%"></div></div>
       <div>${agent.skills.map((s) => `<span class="badge">${escapeHtml(skillTitle(s))}</span>`).join("")}</div>
@@ -88,8 +88,7 @@ function skillTitle(name) {
 }
 
 function renderCatalogOptions() {
-  const { classes, skills, starters } = guild.catalog;
-  $("#agent-class").innerHTML = classes.map((c) => `<option value="${c.id}">${escapeHtml(c.id)}</option>`).join("");
+  const { skills } = guild.catalog;
   const categories = [...new Set(skills.map((s) => s.category))];
   $("#agent-skills").innerHTML = categories.map((category) => `
     <div class="skill-category">${escapeHtml(SKILL_CATEGORY_NAMES[category] ?? category)}</div>
@@ -97,10 +96,6 @@ function renderCatalogOptions() {
     <label><input type="checkbox" value="${escapeHtml(s.name)}">
       <span>${escapeHtml(s.title)}${s.needs_approval ? " 🔒" : ""}<small>${escapeHtml(s.description)}</small></span>
     </label>`).join("")}`).join("");
-  $("#starter-list").innerHTML = starters.map((card, index) => `
-    <div class="item"><span>${escapeHtml(card.portrait)} <strong>${escapeHtml(card.name)}</strong>
-      <span class="muted">${escapeHtml(card.agent_class)} · ${escapeHtml(card.personality)}</span></span>
-      <button class="secondary" data-recruit="${index}">Recruit</button></div>`).join("");
 }
 
 function openSheet(agent) {
@@ -108,12 +103,11 @@ function openSheet(agent) {
   $("#agent-form-title").textContent = agent ? `Edit ${agent.name}` : "New agent";
   $("#agent-name").value = agent?.name ?? "";
   $("#agent-portrait").value = agent?.portrait ?? "";
-  $("#agent-class").value = agent?.agent_class ?? "scholar";
   $("#agent-personality").value = agent?.personality ?? "";
   $("#agent-creativity").value = agent?.creativity ?? 3;
   $("#agent-diligence").value = agent?.diligence ?? 5;
   document.querySelectorAll("#agent-skills input").forEach((box) => {
-    box.checked = agent ? agent.skills.includes(box.value) : ["read_file", "take_note"].includes(box.value);
+    box.checked = agent ? agent.skills.includes(box.value) : false;
   });
   updateSheetHints();
   $("#agent-form").hidden = false;
@@ -121,18 +115,17 @@ function openSheet(agent) {
 }
 
 function updateSheetHints() {
-  const max = guild.catalog.max_skill_slots;
-  const boxes = [...document.querySelectorAll("#agent-skills input")];
-  const used = boxes.filter((b) => b.checked).length;
-  boxes.forEach((b) => { b.disabled = !b.checked && used >= max; });
-  $("#skill-slots").textContent = `${used} of ${max} slots`;
+  const advised = guild.catalog.recommended_max_skills;
+  const used = document.querySelectorAll("#agent-skills input:checked").length;
+  $("#skill-slots").textContent = `${used} chosen`;
+  $("#skill-advice").hidden = used <= advised;
+  $("#skill-advice").textContent =
+    `Small models can get confused with more than ${advised} skills. If this agent picks the wrong tool, give it fewer.`;
   $("#creativity-value").textContent = $("#agent-creativity").value;
   $("#diligence-value").textContent = $("#agent-diligence").value;
-  const chosen = guild.catalog.classes.find((c) => c.id === $("#agent-class").value);
-  $("#agent-class-hint").textContent = chosen ? chosen.description : "";
 }
 
-["#agent-skills", "#agent-creativity", "#agent-diligence", "#agent-class"].forEach((sel) =>
+["#agent-skills", "#agent-creativity", "#agent-diligence"].forEach((sel) =>
   $(sel).addEventListener("input", updateSheetHints));
 
 $("#agent-new").addEventListener("click", () => openSheet(null));
@@ -143,7 +136,6 @@ $("#agent-form").addEventListener("submit", async (event) => {
   const body = {
     name: $("#agent-name").value,
     portrait: $("#agent-portrait").value,
-    agent_class: $("#agent-class").value,
     personality: $("#agent-personality").value,
     skills: [...document.querySelectorAll("#agent-skills input:checked")].map((b) => b.value),
     creativity: Number($("#agent-creativity").value),
@@ -172,13 +164,6 @@ $("#agent-list").addEventListener("click", async (event) => {
     await withErrors(() => api(`/agents/${dismiss}`, { method: "DELETE" }));
     loadAgents();
   }
-});
-
-$("#starter-list").addEventListener("click", async (event) => {
-  const index = event.target.dataset.recruit;
-  if (index === undefined) return;
-  const agent = await withErrors(() => api("/agents/import", { method: "POST", body: guild.catalog.starters[index] }));
-  if (agent) { toast(`${agent.name} joined your guild.`); loadAgents(); }
 });
 
 $("#agent-import").addEventListener("change", async (event) => {

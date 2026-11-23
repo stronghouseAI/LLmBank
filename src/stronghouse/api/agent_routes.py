@@ -8,14 +8,11 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from stronghouse.core.agents import (
-    CLASS_DESCRIPTIONS,
-    MAX_SKILL_SLOTS,
+    RECOMMENDED_MAX_SKILLS,
     SKILLS,
-    STARTER_AGENTS,
     STAT_MAX,
     STAT_MIN,
     Agent,
-    AgentClass,
     Quest,
     agent_from_card,
     agent_to_card,
@@ -28,7 +25,6 @@ router = APIRouter(prefix="/api")
 
 class AgentBody(BaseModel):
     name: str = Field(min_length=1, max_length=60)
-    agent_class: AgentClass
     portrait: str = Field("", max_length=16)
     personality: str = Field("", max_length=2000)
     skills: list[str] = []
@@ -47,13 +43,11 @@ class DecisionBody(BaseModel):
 
 @router.get("/agents/catalog")
 def catalog() -> dict:
-    """Everything the character creator needs: classes, skills, limits and starters."""
+    """Everything the character creator needs: the skills and the stat range."""
     return {
-        "classes": [{"id": c.value, "description": d} for c, d in CLASS_DESCRIPTIONS.items()],
         "skills": [asdict(spec) for spec in SKILLS.values()],
-        "max_skill_slots": MAX_SKILL_SLOTS,
+        "recommended_max_skills": RECOMMENDED_MAX_SKILLS,
         "stat_range": [STAT_MIN, STAT_MAX],
-        "starters": [agent_to_card(agent) for agent in STARTER_AGENTS],
     }
 
 

@@ -121,18 +121,20 @@ def test_unsafe_download_is_rejected(client):
 def test_agent_shop_endpoints(client):
     test_client, _ = client
     catalog = test_client.get("/api/agents/catalog").json()
-    assert catalog["max_skill_slots"] == 5
-    starter = catalog["starters"][0]
+    assert catalog["recommended_max_skills"] == 5
+    assert "starters" not in catalog and "classes" not in catalog
+    every_skill = [skill["name"] for skill in catalog["skills"]]
 
-    imported = test_client.post("/api/agents/import", json=starter).json()
-    assert imported["name"] == starter["name"] and imported["level"] == 1
+    created = test_client.post(
+        "/api/agents", json={"name": "Newsie", "personality": "Reads news", "skills": every_skill}
+    ).json()
+    assert created["skills"] == every_skill and created["level"] == 1
 
-    card = test_client.get(f"/api/agents/{imported['id']}/card").json()
-    assert card == starter
+    card = test_client.get(f"/api/agents/{created['id']}/card").json()
+    imported = test_client.post("/api/agents/import", json=card).json()
+    assert imported["name"] == "Newsie" and imported["id"] != created["id"]
 
-    bad = test_client.post(
-        "/api/agents", json={"name": "X", "agent_class": "scout", "skills": ["fly"]}
-    )
+    bad = test_client.post("/api/agents", json={"name": "X", "skills": ["fly"]})
     assert bad.status_code == 400
 
     quest = test_client.post("/api/quests", json={"task": "hi", "agent_ids": [imported["id"]]})

@@ -11,32 +11,14 @@ from enum import StrEnum
 
 from stronghouse.core.skill_catalog import SKILLS
 
-# Small local models get confused by long tool lists, so each agent equips a
-# limited number of skills. This is both a game rule and a real quality limit.
-MAX_SKILL_SLOTS = 5
+# Any agent may equip any skill (phil, 2026-11-23: build agents from the bottom up).
+# Small local models do get confused by long tool lists, so the UI suggests keeping
+# to this many; it is advice, not a rule.
+RECOMMENDED_MAX_SKILLS = 5
 STAT_MIN, STAT_MAX = 1, 10
 XP_PER_QUEST = 10
 XP_PER_LEVEL = 50
 MAX_JOURNAL_NOTES_IN_PROMPT = 20
-
-
-class AgentClass(StrEnum):
-    SCHOLAR = "scholar"  # research and explanation
-    SCRIBE = "scribe"  # writing and editing
-    ARCHIVIST = "archivist"  # organising files and notes
-    BUILDER = "builder"  # code and commands
-    SCOUT = "scout"  # finding things on the computer
-    REVIEWER = "reviewer"  # checks another agent's work
-
-
-CLASS_DESCRIPTIONS = {
-    AgentClass.SCHOLAR: "You research questions carefully and explain answers clearly.",
-    AgentClass.SCRIBE: "You write and edit text with care for clarity and tone.",
-    AgentClass.ARCHIVIST: "You organise files and information neatly and safely.",
-    AgentClass.BUILDER: "You write code and use commands to build and fix things.",
-    AgentClass.SCOUT: "You search the computer to find files and facts quickly.",
-    AgentClass.REVIEWER: "You check work done by others and point out concrete problems.",
-}
 
 
 @dataclass(frozen=True)
@@ -44,7 +26,6 @@ class Agent:
     """The character sheet."""
 
     name: str
-    agent_class: AgentClass
     portrait: str  # an emoji or short symbol
     personality: str
     skills: list[str]
@@ -65,8 +46,6 @@ def validate_agent(agent: Agent) -> None:
     unknown = [skill for skill in agent.skills if skill not in SKILLS]
     if unknown:
         raise ValueError(f"Unknown skills: {', '.join(unknown)}")
-    if len(set(agent.skills)) > MAX_SKILL_SLOTS:
-        raise ValueError(f"An agent can equip at most {MAX_SKILL_SLOTS} skills.")
     for stat_name in ("creativity", "diligence"):
         value = getattr(agent, stat_name)
         if not STAT_MIN <= value <= STAT_MAX:
@@ -90,11 +69,10 @@ def system_prompt_for(agent: Agent, journal: list[str], home_folder: str) -> str
     "/Downloads" for "my downloads folder" and waste an approval on a wrong path.
     """
     lines = [
-        f"You are {agent.name}, a level {agent.level} {agent.agent_class.value}.",
-        CLASS_DESCRIPTIONS[agent.agent_class],
+        f"You are {agent.name}, a level {agent.level} agent.",
     ]
     if agent.personality.strip():
-        lines.append(f"Personality: {agent.personality.strip()}")
+        lines.append(f"Your job and personality: {agent.personality.strip()}")
     lines += [
         "You work for the user on their own computer, running a local model.",
         f"The user's home folder is {home_folder}. Always use full paths starting with "
@@ -210,41 +188,8 @@ class ModelTurn:
 
 
 AGENT_CARD_FORMAT = "stronghouse-agent"
-AGENT_CARD_VERSION = 1
-
-# Starting characters for the shop. Users can recruit them as-is or edit them.
-STARTER_AGENTS = [
-    Agent(
-        name="Mira", agent_class=AgentClass.SCOUT, portrait="🧭",
-        personality="Quick, curious and precise. Reports exactly where things are.",
-        skills=["list_folder", "search_files", "read_file", "read_pdf", "take_note"],
-        creativity=2, diligence=5,
-    ),
-    Agent(
-        name="Quill", agent_class=AgentClass.SCRIBE, portrait="🪶",
-        personality="Warm and clear. Writes in plain English and keeps things short.",
-        skills=["read_file", "write_file", "take_note"],
-        creativity=6, diligence=4,
-    ),
-    Agent(
-        name="Forge", agent_class=AgentClass.BUILDER, portrait="🔨",
-        personality="Practical and careful. Explains each command before running it.",
-        skills=["list_folder", "read_file", "write_file", "run_command", "take_note"],
-        creativity=3, diligence=7,
-    ),
-    Agent(
-        name="Herald", agent_class=AgentClass.SCHOLAR, portrait="📰",
-        personality="Calm news reader. Gives neutral headlines with their sources and dates.",
-        skills=["read_news_feed", "fetch_web_page", "web_search", "current_datetime", "take_note"],
-        creativity=2, diligence=5,
-    ),
-    Agent(
-        name="Warden", agent_class=AgentClass.REVIEWER, portrait="🛡️",
-        personality="Strict but fair. Checks facts and points out exactly what is wrong.",
-        skills=["read_file", "list_folder"],
-        creativity=2, diligence=4,
-    ),
-]  # fmt: skip
+# Version 2 dropped agent classes; version 1 cards still load (their class is ignored).
+AGENT_CARD_VERSION = 2
 
 
 def agent_to_card(agent: Agent) -> dict:
@@ -253,7 +198,6 @@ def agent_to_card(agent: Agent) -> dict:
         "format": AGENT_CARD_FORMAT,
         "version": AGENT_CARD_VERSION,
         "name": agent.name,
-        "agent_class": agent.agent_class.value,
         "portrait": agent.portrait,
         "personality": agent.personality,
         "skills": list(agent.skills),
@@ -273,7 +217,6 @@ def agent_from_card(card: dict) -> Agent:
     try:
         agent = Agent(
             name=str(card["name"]),
-            agent_class=AgentClass(card["agent_class"]),
             portrait=str(card.get("portrait", "")),
             personality=str(card.get("personality", "")),
             skills=[skill for skill in card.get("skills", []) if skill in SKILLS],

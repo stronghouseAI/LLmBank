@@ -104,8 +104,6 @@
             <label class="secondary file-button">Import card<input id="agent-import" type="file" accept=".json,application/json" hidden></label>
           </div>
           <div id="agent-list" class="cards"></div>
-          <h3>Recruit a starter</h3>
-          <div id="starter-list" class="list"></div>
         </div>
         <div>
           <form id="agent-form" class="box" hidden>
@@ -114,12 +112,11 @@
               <label class="grow">Name <input id="agent-name" maxlength="60" required></label>
               <label class="narrow">Portrait <input id="agent-portrait" maxlength="16" placeholder="🧭"></label>
             </div>
-            <label>Class <select id="agent-class"></select></label>
-            <div id="agent-class-hint" class="muted"></div>
-            <label>Personality <textarea id="agent-personality" rows="3" maxlength="2000"
-              placeholder="How they talk and work, e.g. calm, thorough, explains every step"></textarea></label>
+            <label>Job and personality <textarea id="agent-personality" rows="3" maxlength="2000"
+              placeholder="What this agent is for and how it works, e.g. Reads the UK news every morning and gives neutral headlines with sources"></textarea></label>
             <h3>Skills <span id="skill-slots" class="muted"></span></h3>
-            <div class="muted">🔒 = asks your permission every time it is used.</div>
+            <div class="muted">Tick every skill this agent needs for its job. 🔒 = asks your permission every time it is used.</div>
+            <div id="skill-advice" class="warning" hidden></div>
             <div id="agent-skills" class="skill-grid"></div>
             <h3>Stats</h3>
             <label>Creativity <span id="creativity-value"></span>
