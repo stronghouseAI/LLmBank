@@ -171,7 +171,33 @@ def test_quest_asks_before_each_action(shai, tmp_path: Path):
     assert "The note says the cube is green." in out
 
 
-def test_no_command_prints_help(shai):
+@pytest.mark.parametrize("words", [(), ("help",), ("-h",), ("-help",), ("--help",)])
+def test_help_shows_the_full_reference(shai, words):
     run, _ = shai
-    code, out = run()
-    assert code == 0 and "vault" in out and "discover" in out
+    code, out = run(*words)
+    assert code == 0
+    for command in (
+        "vault ls",
+        "load MODEL",
+        "discover QUERY",
+        "--max-gb",
+        "quest AGENT",
+        "EXAMPLES",
+    ):
+        assert command in out
+
+
+def test_reference_lists_every_command():
+    from stronghouse.cli.reference import SECTIONS
+
+    documented = " ".join(usage for _, rows in SECTIONS for usage, _ in rows)
+    parser_commands = commands.build_parser()._subparsers._group_actions[0].choices
+    for name in parser_commands:
+        assert name in documented, f"{name} is missing from shai help"
+
+
+def test_single_dash_help_on_a_command(shai):
+    run, _ = shai
+    with pytest.raises(SystemExit) as exit_info:
+        run("discover", "-help")
+    assert exit_info.value.code == 0
