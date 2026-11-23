@@ -20,6 +20,7 @@
       <button data-tab="discover">Discover</button>
       <button data-tab="run">Run</button>
       <button data-tab="chat">Chat</button>
+      <button data-tab="guild">Guild</button>
       <button data-tab="system">System</button>
     </nav>
     <div id="engine-pill" class="pill">engine: …</div>
@@ -94,6 +95,73 @@
       </form>
     </section>
 
+    <!-- Guild: the Agent shop -->
+    <section id="tab-guild" class="panel">
+      <div class="grid-2">
+        <div>
+          <div class="toolbar">
+            <button id="agent-new">Create agent</button>
+            <label class="secondary file-button">Import card<input id="agent-import" type="file" accept=".json,application/json" hidden></label>
+          </div>
+          <div id="agent-list" class="cards"></div>
+          <h3>Recruit a starter</h3>
+          <div id="starter-list" class="list"></div>
+        </div>
+        <div>
+          <form id="agent-form" class="box" hidden>
+            <h3 id="agent-form-title">Character sheet</h3>
+            <div class="row tight">
+              <label class="grow">Name <input id="agent-name" maxlength="60" required></label>
+              <label class="narrow">Portrait <input id="agent-portrait" maxlength="16" placeholder="🧭"></label>
+            </div>
+            <label>Class <select id="agent-class"></select></label>
+            <div id="agent-class-hint" class="muted"></div>
+            <label>Personality <textarea id="agent-personality" rows="3" maxlength="2000"
+              placeholder="How they talk and work, e.g. calm, thorough, explains every step"></textarea></label>
+            <h3>Skills <span id="skill-slots" class="muted"></span></h3>
+            <div id="agent-skills" class="skill-grid"></div>
+            <h3>Stats</h3>
+            <label>Creativity <span id="creativity-value"></span>
+              <input id="agent-creativity" type="range" min="1" max="10"></label>
+            <div class="muted">Low = precise and predictable. High = inventive.</div>
+            <label>Diligence <span id="diligence-value"></span>
+              <input id="agent-diligence" type="range" min="1" max="10"></label>
+            <div class="muted">How many steps the agent may take on one quest.</div>
+            <div class="row">
+              <button type="submit">Save agent</button>
+              <button type="button" id="agent-cancel" class="secondary">Close</button>
+            </div>
+          </form>
+
+          <div class="box" id="quest-board">
+            <h3>Quest board</h3>
+            <textarea id="quest-task" rows="3" placeholder="What should they do? e.g. Find every PDF in ~/Documents and list them in ~/pdfs.txt"></textarea>
+            <div class="row tight">
+              <label class="grow">Agent <select id="quest-worker"></select></label>
+              <label class="grow">Reviewer (optional) <select id="quest-reviewer"></select></label>
+            </div>
+            <div class="muted">Uses the model loaded on the Run tab. Every action on your computer waits for your OK.</div>
+            <div class="row"><button id="quest-start">Start quest</button></div>
+          </div>
+
+          <div class="box" id="quest-view" hidden>
+            <h3 id="quest-title">Quest</h3>
+            <div id="quest-approval" class="approval-box" hidden></div>
+            <div id="quest-log" class="quest-log"></div>
+            <div class="row"><button id="quest-cancel" class="danger">Cancel quest</button></div>
+          </div>
+
+          <h3>Recent quests</h3>
+          <div id="quest-list" class="list"></div>
+        </div>
+      </div>
+      <dialog id="journal-dialog" class="box">
+        <h3 id="journal-title">Journal</h3>
+        <div id="journal-list" class="list"></div>
+        <div class="row"><button id="journal-close" class="secondary">Close</button></div>
+      </dialog>
+    </section>
+
     <!-- System -->
     <section id="tab-system" class="panel">
       <div id="system-view" class="box"></div>
@@ -102,5 +170,6 @@
 
   <div id="toast" class="toast" hidden></div>
   <script src="app.js"></script>
+  <script src="guild.js"></script>
 </body>
 </html>
