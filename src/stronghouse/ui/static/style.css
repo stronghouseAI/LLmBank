@@ -343,3 +343,22 @@ dialog h2 { margin-top: 0; font-size: var(--text-md); text-transform: none; lett
 .job-output { white-space: pre-wrap; word-break: break-word; max-height: 60vh; overflow: auto; font-size: var(--text-sm);
   background: var(--sidebar); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--space-3); margin-top: var(--space-3); }
 label.check { display: flex; align-items: center; gap: var(--space-2); margin-right: auto; }
+
+/* Logs: selectable text, Copy buttons, and the Logs page */
+.log { user-select: text; cursor: text; }
+.row.spread { justify-content: space-between; }
+.row.spread > h2 { margin: 0; }
+.logs-toolbar { flex-wrap: wrap; align-items: center; }
+.logs-toolbar label { margin: 0; }
+.logs-toolbar label.check { margin-right: 0; }
+label.inline { display: flex; align-items: center; gap: var(--space-2); }
+label.inline select { width: auto; margin-top: 0; }
+.segmented { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
+  margin-right: auto; }
+.segmented button { border-radius: 0; border: 0; border-right: 1px solid var(--border); background: var(--surface-2);
+  color: var(--muted); }
+.segmented button:last-child { border-right: 0; }
+.segmented button:hover { background: var(--surface-hover); color: var(--text); }
+.segmented button.active { background: var(--accent-soft); color: var(--text); }
+.log-page { max-height: calc(100vh - 260px); min-height: 320px; font-size: var(--text-sm); color: var(--text);
+  margin-top: var(--space-3); }
