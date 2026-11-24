@@ -14,6 +14,7 @@ from stronghouse.core.agents import Agent, ModelTurn, ToolCall
 from stronghouse.core.models import HardwareProfile
 from stronghouse.services.engine import EngineState, EngineStatus
 from stronghouse.services.huggingface import RemoteFile, RemoteModel
+from stronghouse.services.job_runner import JobRunner
 from stronghouse.services.quest_runner import QuestRunner
 from stronghouse.services.skills import SkillExecutor
 from tests.gguf_builder import moe_model_spec, write_gguf
@@ -83,6 +84,10 @@ def shai(tmp_path: Path, capsys, monkeypatch):
     services.quests = QuestRunner(
         services.agents, services.engine, SkillExecutor(services.agents.add_note)
     )
+    services.jobs = JobRunner(
+        services.jobs.store, services.engine, services.load_model_for_job,
+        notify=lambda *_: None, output_dir=settings.jobs_output_dir,
+    )  # fmt: skip
     for name in ("qwen3-8b-q4.gguf", "deepseek-v2-lite-q4.gguf"):
         folder = settings.archive_dir / "owner" / name.split("-q4")[0]
         folder.mkdir(parents=True)
@@ -201,3 +206,25 @@ def test_single_dash_help_on_a_command(shai):
     with pytest.raises(SystemExit) as exit_info:
         run("discover", "-help")
     assert exit_info.value.code == 0
+
+
+def test_plan_shows_speed_forecast_and_flags(shai):
+    run, _ = shai
+    code, out = run("vault", "plan", "qwen3", "--threads", "6", "--extra=-b 4096")
+    assert code == 0 and "tokens/s" in out and "(estimate)" in out
+    assert "--threads 6" in out and "-b 4096" in out
+
+
+def test_job_add_ls_show(shai):
+    run, services = shai
+    services.jobs.stop(wait_seconds=5)  # run the queue by hand below
+    code, out = run("job", "add", "Plan", "my", "week", "--model", "deepseek", "--no-think")
+    assert code == 0 and "Queued job 1" in out and "shai job show 1" in out
+    _, out = run("job", "ls")
+    assert "Plan my week" in out and "queued" in out
+    services.jobs.run_next()
+    assert "deepseek" in str(services.engine.started[0])
+    code, out = run("job", "show", "1")
+    assert code == 0 and "17 × 23 = 391" in out  # noqa: RUF001
+    code, out = run("job", "cancel", "1")
+    assert code == 1 and "already finished" in out

@@ -4,6 +4,7 @@
     shai vault load qwen3-8b        shai files Qwen/Qwen3-8B-GGUF
     shai chat                       shai get Qwen/Qwen3-8B-GGUF Qwen3-8B-Q4_K_M.gguf
     shai quest Newsie "..."         shai status
+    shai job add "..." --model glm  shai job ls / show / cancel / retry
 
 Each command is a small function that calls the app's HTTP API and prints the
 answer. See docs/adr/0009-terminal-client.md.
@@ -79,12 +80,14 @@ def vault_plan(api: ApiClient, args: argparse.Namespace) -> None:
     entry = _find_model(api, args.model)
     result = api.post(f"/library/{entry['id']}/plan", _plan_body(args))
     _print_plan(entry, result["plan"], result["command"])
+    _print_forecast(result["forecast"])
 
 
 def vault_load(api: ApiClient, args: argparse.Namespace) -> None:
     entry = _find_model(api, args.model)
     plan = api.post(f"/library/{entry['id']}/plan", _plan_body(args))
     _print_plan(entry, plan["plan"], plan["command"])
+    _print_forecast(plan["forecast"])
     api.post("/engine/start", {**_plan_body(args), "model_id": entry["id"]})
     print(paint("Loading", "yellow") + " (big models take a minute)", end="", flush=True)
     deadline = time.monotonic() + LOAD_TIMEOUT_SECONDS
@@ -327,6 +330,75 @@ def _step_text(step: dict) -> str:
     return paint(step["text"], colour) if colour else step["text"]
 
 
+# ---------- background jobs ----------
+
+JOB_COLOURS = {"done": "green", "running": "yellow", "loading": "yellow", "failed": "red"}
+
+
+def job_add(api: ApiClient, args: argparse.Namespace) -> None:
+    prompt = " ".join(args.prompt)
+    if args.file:
+        prompt = (prompt + "\n\n" if prompt else "") + _read_prompt_file(args.file)
+    body = {**_plan_body(args), "prompt": prompt, "think": not args.no_think}
+    if args.model:
+        body["model_id"] = _find_model(api, args.model)["id"]
+    if args.max_tokens:
+        body["max_tokens"] = args.max_tokens
+    job = api.post("/jobs", body)
+    print(f"Queued job {paint(str(job['id']), 'bold')}: {job['title']}")
+    print(
+        "It runs in the background; you get a desktop notification when it is done.\n"
+        f"Check on it with: shai job show {job['id']}"
+    )
+
+
+def job_ls(api: ApiClient, _args: argparse.Namespace) -> None:
+    jobs = api.get("/jobs")
+    if not jobs:
+        print('No jobs yet. Queue one with: shai job add "your prompt" --model NAME')
+        return
+    rows = [
+        [
+            str(j["id"]),
+            paint(j["state"], JOB_COLOURS.get(j["state"], "dim")),
+            j["title"],
+            str(j["generated_tokens"] or ""),
+            f"{j['tokens_per_second']:g}" if j["tokens_per_second"] else "",
+        ]
+        for j in jobs
+    ]
+    print(render.table(["id", "state", "prompt", "tokens", "tok/s"], rows))
+
+
+def job_show(api: ApiClient, args: argparse.Namespace) -> None:
+    job = api.get(f"/jobs/{args.id}")
+    print(f"Job {job['id']}: {paint(job['state'], JOB_COLOURS.get(job['state'], 'dim'), 'bold')}")
+    if job["error"]:
+        print(paint(job["error"], "red"))
+    if job["output_path"]:
+        print(paint(f"Answer file: {job['output_path']}", "dim"))
+    print()
+    print(job["output"] or "(nothing written yet)")
+
+
+def job_cancel(api: ApiClient, args: argparse.Namespace) -> None:
+    api.post(f"/jobs/{args.id}/cancel")
+    print(f"Stopping job {args.id}.")
+
+
+def job_retry(api: ApiClient, args: argparse.Namespace) -> None:
+    job = api.post(f"/jobs/{args.id}/retry")
+    print(f"Queued again as job {job['id']}.")
+
+
+def _read_prompt_file(path: str) -> str:
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return handle.read()
+    except OSError as error:
+        raise ApiError(f"Could not read {path}: {error.strerror}") from error
+
+
 # ---------- system ----------
 
 
@@ -407,10 +479,15 @@ def _with_best_file(api: ApiClient, models: list[dict], max_gb: float) -> list[d
 
 def _plan_body(args: argparse.Namespace) -> dict:
     body: dict = {"context": args.ctx, "kv_cache_type": args.kv}
-    if args.n_cpu_moe is not None:
-        body["n_cpu_moe"] = args.n_cpu_moe
-    if args.ngl is not None:
-        body["n_gpu_layers"] = args.ngl
+    optional = {
+        "n_cpu_moe": args.n_cpu_moe,
+        "n_gpu_layers": args.ngl,
+        "threads": args.threads,
+        "batch_size": args.batch,
+        "ubatch_size": args.ubatch,
+        "extra_args": args.extra,
+    }
+    body.update({key: value for key, value in optional.items() if value is not None})
     return body
 
 
@@ -425,9 +502,25 @@ def _print_plan(entry: dict, plan: dict, command: list[str]) -> None:
         f" · experts of {plan['n_cpu_moe']} blocks"
     )
     print(f"  context    {plan['context_size']} tokens · KV cache {plan['kv_cache_type']}")
+    if plan["memory_mode"] == "stream_from_disk":
+        print(f"  memory     {paint('streams from disk (big model mode)', 'yellow')}")
     for note in plan["notes"]:
         print(paint(f"  note: {note}", "dim"))
     print(paint("  $ " + " ".join(command), "dim"))
+
+
+def _print_forecast(forecast: dict) -> None:
+    print(f"  speed      {forecast['wait']} (estimate)")
+    if forecast["quant_tip"]:
+        print(paint(f"  {forecast['quant_tip']}", "brass"))
+    options = forecast["quant_options"]
+    if options:
+        cells = [
+            f"{o['label']}{'*' if o['is_current'] else ''} {o['tokens_per_second']:g}"
+            + ("" if o["memory_mode"] == "in_memory" else " (disk)")
+            for o in options
+        ]
+        print(paint("  tokens/s by quant: " + " · ".join(cells), "dim"))
 
 
 # ---------- argument parsing ----------
@@ -516,12 +609,36 @@ def build_parser() -> argparse.ArgumentParser:
     qst.add_argument("--reviewer", help="a second agent who checks the work")
     qst.set_defaults(handler=quest)
 
+    _add_job_commands(commands)
     commands.add_parser("status", help="engine, model and hardware").set_defaults(handler=status)
     commands.add_parser("system", help="GPU, memory and CPU").set_defaults(handler=system)
     commands.add_parser("stop", help="stop the background app (unloads the model)")
     serve = commands.add_parser("serve", help="run the app in this terminal (the web UI)")
     serve.add_argument("--no-browser", action="store_true")
     return parser
+
+
+def _add_job_commands(commands) -> None:
+    job = commands.add_parser(
+        "job", help="background jobs: queue prompts for a big model and walk away"
+    ).add_subparsers(dest="action", required=True)
+    add = job.add_parser("add", help="queue a prompt (runs in the background)")
+    add.add_argument("prompt", nargs="*", help="the prompt (or use --file)")
+    add.add_argument("--file", help="read the prompt (or extra text) from this file")
+    add.add_argument("--model", help="load this vault model first (default: the loaded one)")
+    add.add_argument("--no-think", action="store_true", help="answer directly, skip thinking")
+    add.add_argument("--max-tokens", type=int, help="stop after this many tokens")
+    _add_plan_flags(add, with_model=False)
+    add.set_defaults(handler=job_add)
+    job.add_parser("ls", help="list jobs, newest first").set_defaults(handler=job_ls)
+    for name, handler, text in (
+        ("show", job_show, "show a job's answer so far"),
+        ("cancel", job_cancel, "stop a running job or remove a queued one"),
+        ("retry", job_retry, "queue a finished job again"),
+    ):
+        sub = job.add_parser(name, help=text)
+        sub.add_argument("id", type=int)
+        sub.set_defaults(handler=handler)
 
 
 def _add_plan_flags(sub: argparse.ArgumentParser, with_model: bool = False) -> None:
@@ -531,6 +648,14 @@ def _add_plan_flags(sub: argparse.ArgumentParser, with_model: bool = False) -> N
     sub.add_argument("--kv", choices=["f16", "q8_0"], default="f16", help="KV cache type")
     sub.add_argument("--n-cpu-moe", type=int, help="experts of the first N blocks on CPU")
     sub.add_argument("--ngl", type=int, help="layers on the GPU (--n-gpu-layers)")
+    sub.add_argument("--threads", type=int, help="CPU threads (default: llama.cpp decides)")
+    sub.add_argument("--batch", type=int, help="llama-server --batch-size")
+    sub.add_argument("--ubatch", type=int, help="llama-server --ubatch-size")
+    sub.add_argument(
+        "--extra",
+        metavar="FLAGS",
+        help='more llama-server flags, e.g. --extra="-b 4096 -ub 1024" (or a pasted command)',
+    )
 
 
 def run(argv: list[str], settings: Settings, api: ApiClient | None = None) -> int:

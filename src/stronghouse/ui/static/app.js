@@ -331,19 +331,58 @@ async function showProfile() {
 }
 $("#run-model").addEventListener("change", showProfile);
 
+// Extra llama-server flags are remembered per browser, so a fast terminal setup
+// only has to be pasted once.
+const EXTRA_FLAGS_KEY = "stronghouse.extraFlags";
+function rememberedExtraFlags() {
+  try { return localStorage.getItem(EXTRA_FLAGS_KEY) ?? ""; } catch { return ""; }
+}
+$("#run-extra").value = rememberedExtraFlags();
+$("#run-extra").addEventListener("change", () => {
+  try { localStorage.setItem(EXTRA_FLAGS_KEY, $("#run-extra").value); } catch { /* private window */ }
+});
+
 function planBody() {
   const optionalInt = (sel) => ($(sel).value === "" ? null : Number($(sel).value));
+  const extra = $("#run-extra").value.trim();
   return {
     context: Number($("#run-context").value),
     kv_cache_type: $("#run-kv").value,
     n_cpu_moe: optionalInt("#run-ncpumoe"),
     n_gpu_layers: optionalInt("#run-ngl"),
+    threads: optionalInt("#run-threads"),
+    batch_size: optionalInt("#run-batch"),
+    ubatch_size: optionalInt("#run-ubatch"),
+    // Empty box: use the app-wide default flags (STRONGHOUSE_EXTRA_ARGS), if any.
+    extra_args: extra === "" ? null : extra,
   };
 }
 
 const STRATEGY_NAMES = { full_gpu: "Full GPU", moe_split: "MoE split", partial_layers: "Partial layers", cpu_only: "CPU only" };
 
-function renderPlan({ plan, command }) {
+// Same rounding as the server's estimates: 125, 4.2 or 0.24 tokens/s.
+const formatRate = (rate) => (rate >= 10 ? rate.toFixed(0) : rate >= 1 ? rate.toFixed(1) : rate.toFixed(2));
+
+function renderForecast(forecast, plan) {
+  if (!forecast) { $("#run-forecast").innerHTML = ""; return; }
+  const streaming = plan.memory_mode === "stream_from_disk";
+  const quants = forecast.quant_options.map((o) => `
+    <span class="badge ${o.memory_mode === "in_memory" ? "fit-gpu" : "fit-offload"} ${o.is_current ? "current" : ""}"
+      title="${o.memory_mode === "in_memory" ? "fits in GPU + RAM" : "streams from disk"} · about ${formatBytes(o.estimated_file_bytes)}">
+      ${escapeHtml(o.label)} · ${formatRate(o.tokens_per_second)} t/s</span>`).join("");
+  $("#run-forecast").innerHTML = `
+    <div class="speed">${streaming ? '<span class="badge fit-offload">Big model mode</span> ' : ""}Expected speed:
+      <strong>${escapeHtml(forecast.wait)}</strong></div>
+    <div class="muted">A rough estimate from memory speeds. The speed test gives the real number.
+      ${streaming ? "Too slow to watch? Queue it on the Jobs page and walk away." : ""}</div>
+    ${forecast.quant_tip ? `<div class="notice warn">${escapeHtml(forecast.quant_tip)}</div>` : ""}
+    ${quants ? `<details><summary>Other quantizations of this model</summary>
+      <div class="quant-grid">${quants}</div>
+      <div class="muted">Green fits in GPU + RAM; amber streams from disk. Download another quantization from Discover.</div></details>` : ""}`;
+}
+
+function renderPlan({ plan, command, forecast }) {
+  renderForecast(forecast, plan);
   const total = plan.estimated_gpu_bytes + plan.estimated_cpu_bytes || 1;
   const gpuShare = (100 * plan.estimated_gpu_bytes) / total;
   $("#run-plan-view").innerHTML = `
