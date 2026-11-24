@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import asdict, replace
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -12,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from stronghouse.core.chat_transcript import ChatTurn, transcript_filename, transcript_text
 from stronghouse.core.hub_filters import (
     ModelKind,
     SearchFilters,
@@ -83,6 +85,17 @@ class ChatRequest(BaseModel):
 
     model_config = ConfigDict(extra="allow")
     messages: list[dict] = Field(min_length=1)
+
+
+class TranscriptTurn(BaseModel):
+    role: str = Field(max_length=32)
+    content: str
+    thinking: str = ""
+
+
+class TranscriptRequest(BaseModel):
+    messages: list[TranscriptTurn] = Field(min_length=1)
+    include_thinking: bool = True
 
 
 @router.get("/hardware")
@@ -197,6 +210,23 @@ def chat(body: ChatRequest, request: Request) -> StreamingResponse:
             yield sse_error(f"The engine stopped mid-reply: {error}")
 
     return StreamingResponse(events(), media_type="text/event-stream")
+
+
+@router.post("/chat/transcript")
+def chat_transcript(body: TranscriptRequest, request: Request) -> dict:
+    """The conversation as plain text and a file name, for Copy chat and Export .txt.
+
+    Built here rather than in the page so the format is tested; the browser saves the file.
+    """
+    status = request.app.state.services.engine.status()
+    model = Path(status.model_path).name if status.model_path else None
+    saved_at = datetime.now()
+    turns = [ChatTurn(m.role, m.content, m.thinking) for m in body.messages]
+    log.info("chat transcript built", extra={"messages": len(turns), "model": model})
+    return {
+        "text": transcript_text(turns, model, saved_at, body.include_thinking),
+        "filename": transcript_filename(model, saved_at),
+    }
 
 
 def sse_error(message: str) -> bytes:

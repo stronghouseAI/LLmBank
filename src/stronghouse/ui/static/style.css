@@ -236,6 +236,10 @@ main { min-width: 0; max-width: 1240px; width: 100%; padding: var(--space-5) var
   margin: auto; font-size: var(--text-sm); }
 .msg { padding: var(--space-3) var(--space-4); border-radius: var(--radius-lg); max-width: min(760px, 85%);
   white-space: pre-wrap; line-height: 1.55; }
+/* Chat text is always selectable; the Copy row under a reply is not, so a hand selection stays clean */
+.msg { user-select: text; cursor: text; }
+.msg-tools { display: flex; justify-content: flex-end; margin-top: var(--space-2); user-select: none; cursor: default; }
+.head-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
 .msg.user { align-self: flex-end; background: var(--surface-2); border: 1px solid var(--border); }
 .msg.assistant { align-self: flex-start; background: var(--surface); border: 1px solid var(--border); }
 .chat-form { position: sticky; bottom: 0; background: var(--bg); padding: var(--space-3) 0 var(--space-4);

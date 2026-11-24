@@ -501,7 +501,8 @@ async function pollEngine() {
 
 // ---------- chat ----------
 
-const chatHistory = [];
+const chatHistory = [];  // sent to the model: role and content only
+const chatTurns = [];    // shown and saved: also each reply's thinking, for Copy chat and Export
 
 function addMessage(role, text) {
   const el = document.createElement("div");
@@ -550,20 +551,41 @@ function replyView(bubble) {
   return {
     addThought(text) {
       thought += text;
-      thoughtText.textContent = thought;
+      thoughtText.append(text);
       thoughtText.scrollTop = thoughtText.scrollHeight;
       tick();
     },
-    addAnswer(text) { finishThinking(); answer.textContent += text; },
+    // append() adds a new text node instead of rewriting the text, so a selection the
+    // user made in the reply survives while more of it streams in.
+    addAnswer(text) { finishThinking(); answer.append(text); },
     answer: () => answer.textContent,
-    end(note) { finishThinking(); clearInterval(timer); if (note) answer.textContent += note; },
+    thought: () => thought,
+    end(note) { finishThinking(); clearInterval(timer); if (note) answer.append(note); addCopyButton(bubble, answer); },
     fail(message) {
       finishThinking();
       clearInterval(timer);
       answer.classList.add("error");
-      answer.textContent += `${answer.textContent ? "\n\n" : ""}${message}`;
+      answer.append(`${answer.textContent ? "\n\n" : ""}${message}`);
     },
   };
+}
+
+// A Copy button under a finished reply. It sits outside the answer text, so selecting
+// the reply by hand does not pick up the button's label.
+function addCopyButton(bubble, answer) {
+  const tools = document.createElement("div");
+  tools.className = "msg-tools";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "secondary small";
+  button.textContent = "Copy";
+  button.title = "Copy this reply";
+  button.addEventListener("click", async () => {
+    if (await copyText(answer.textContent)) toast("Reply copied.", "info");
+    else toast("Could not copy the reply. Select the text and press Ctrl+C instead.");
+  });
+  tools.appendChild(button);
+  bubble.appendChild(tools);
 }
 
 // Some models write their reasoning inline as <think>...</think> instead of in a
@@ -610,6 +632,7 @@ function setChatBusy(busy) {
 
 async function sendChat(text) {
   chatHistory.push({ role: "user", content: text });
+  chatTurns.push({ role: "user", content: text });
   addMessage("user", text);
   const view = replyView(addMessage("assistant", ""));
   const addContent = inlineThinkSplitter(view);
@@ -648,12 +671,18 @@ async function sendChat(text) {
     }
     view.end(view.answer() ? "" : "(The model sent an empty answer.)");
     chatHistory.push({ role: "assistant", content: view.answer() });
+    chatTurns.push({ role: "assistant", content: view.answer(), thinking: view.thought() });
   } catch (error) {
     const stopped = error.name === "AbortError";
     if (!stopped) view.fail(error.message);
     else view.end(view.answer() ? "\n\n(Stopped.)" : "(Stopped.)");
-    if (stopped && view.answer() !== "(Stopped.)") chatHistory.push({ role: "assistant", content: view.answer() });
-    else chatHistory.pop();
+    if (stopped && view.answer() !== "(Stopped.)") {
+      chatHistory.push({ role: "assistant", content: view.answer() });
+      chatTurns.push({ role: "assistant", content: view.answer(), thinking: view.thought() });
+    } else {
+      chatHistory.pop();
+      chatTurns.pop();
+    }
   } finally {
     chatAbort = null;
     setChatBusy(false);
@@ -672,7 +701,55 @@ $("#chat-stop").addEventListener("click", () => chatAbort?.abort());
 $("#chat-input").addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); $("#chat-form").requestSubmit(); }
 });
-$("#chat-clear").addEventListener("click", () => { chatHistory.length = 0; $("#chat-log").innerHTML = ""; });
+$("#chat-clear").addEventListener("click", () => {
+  chatHistory.length = 0;
+  chatTurns.length = 0;
+  $("#chat-log").innerHTML = "";
+});
+
+// The conversation as plain text (built by the server, so the format is tested there).
+async function chatTranscript() {
+  if (!chatTurns.length) {
+    toast("Nothing to save yet. Send a message first.", "info");
+    return null;
+  }
+  const response = await fetch("/api/chat/transcript", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ messages: chatTurns }),
+  });
+  if (!response.ok) throw await errorFromResponse(response);
+  return response.json();
+}
+
+// Save text as a .txt file through the browser's own download, so nothing leaves the computer.
+function downloadText(text, filename) {
+  const url = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+$("#chat-copy-all").addEventListener("click", (event) => whileBusy(event.currentTarget, async () => {
+  try {
+    const transcript = await chatTranscript();
+    if (!transcript) return;
+    if (await copyText(transcript.text)) toast("Chat copied.", "info");
+    else toast("Could not copy the chat. Use Export .txt instead.");
+  } catch (error) { toast(error.message); }
+}));
+$("#chat-export").addEventListener("click", (event) => whileBusy(event.currentTarget, async () => {
+  try {
+    const transcript = await chatTranscript();
+    if (!transcript) return;
+    downloadText(transcript.text, transcript.filename);
+    toast(`Saved ${transcript.filename} to your Downloads folder.`, "info");
+  } catch (error) { toast(error.message); }
+}));
 
 // ---------- system ----------
 

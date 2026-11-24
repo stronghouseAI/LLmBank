@@ -166,8 +166,12 @@
       <!-- Chat -->
       <section id="tab-chat" class="panel chat-panel" role="tabpanel">
         <header class="page-head">
-          <div><h1>Chat</h1><p>Talk to the model loaded on the Run page.</p></div>
-          <button type="button" id="chat-clear" class="secondary">Clear</button>
+          <div><h1>Chat</h1><p>Talk to the model loaded on the Run page. Select any text to copy it, or save the whole chat.</p></div>
+          <div class="head-actions">
+            <button type="button" id="chat-copy-all" class="secondary" title="Copy the whole chat as plain text">Copy chat</button>
+            <button type="button" id="chat-export" class="secondary" title="Save the whole chat as a .txt file">Export .txt</button>
+            <button type="button" id="chat-clear" class="secondary">Clear</button>
+          </div>
         </header>
         <div id="chat-log" class="chat-log"></div>
         <form id="chat-form" class="chat-form">
