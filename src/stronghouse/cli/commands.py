@@ -15,12 +15,16 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from pathlib import Path
 
+from stronghouse import __version__
 from stronghouse.cli import render
 from stronghouse.cli.client import ApiClient, ApiError, connect, stop_background_server
 from stronghouse.cli.reference import HELP_WORDS, reference_text
 from stronghouse.cli.render import format_bytes, paint
 from stronghouse.config import Settings, load_settings
+from stronghouse.core.log_view import LOG_SOURCES, find_source, report_text, shorten_home
+from stronghouse.services.log_files import read_all_logs, read_log
 
 GIB = 1024**3
 POLL_SECONDS = 1.0
@@ -644,6 +648,17 @@ def _add_system(commands: argparse._SubParsersAction) -> None:
     commands.add_parser("status", help="engine, model and hardware").set_defaults(handler=status)
     commands.add_parser("system", help="GPU, memory and CPU").set_defaults(handler=system)
     commands.add_parser("stop", help="stop the background app (unloads the model)")
+    logs = commands.add_parser(
+        "logs", help="show the app's logs, secrets hidden (works even if the app is down)"
+    )
+    logs.add_argument(
+        "source",
+        nargs="?",
+        choices=[source.key for source in LOG_SOURCES],
+        help="which log (default: every log, with a few facts about this computer)",
+    )
+    logs.add_argument("--lines", type=int, default=200, help="last N lines (default 200)")
+    logs.add_argument("--problems", action="store_true", help="only warnings and errors")
     serve = commands.add_parser("serve", help="open the web UI (starts the app if needed)")
     serve.add_argument("--no-browser", action="store_true")
 
@@ -688,6 +703,18 @@ def _add_plan_flags(sub: argparse.ArgumentParser, with_model: bool = False) -> N
     )
 
 
+def logs_text(settings: Settings, key: str | None, lines: int, problems: bool) -> str:
+    """Read the log files directly, so this works when the app will not start."""
+    lines = max(1, lines)
+    if key is not None:
+        source = find_source(key)
+        assert source is not None  # argparse only allows known keys
+        return read_log(settings, source, lines, problems).copy_text
+    views = read_all_logs(settings, lines, problems)
+    facts = [f"Data folder: {shorten_home(str(settings.data_dir), str(Path.home()))}"]
+    return report_text(__version__, facts, [view.copy_text for view in views])
+
+
 def run(argv: list[str], settings: Settings, api: ApiClient | None = None) -> int:
     """Parse and run one command. Returns the process exit code."""
     if not argv or argv[0] in HELP_WORDS:
@@ -701,6 +728,9 @@ def run(argv: list[str], settings: Settings, api: ApiClient | None = None) -> in
         from stronghouse.__main__ import serve
 
         serve(no_browser=args.no_browser)
+        return 0
+    if args.command == "logs":
+        print(logs_text(settings, args.source, args.lines, args.problems))
         return 0
     if args.command == "stop":
         print("Stopped." if stop_background_server(settings) else "No background app was running.")

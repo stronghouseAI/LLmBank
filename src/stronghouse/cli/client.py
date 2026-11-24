@@ -102,7 +102,7 @@ def pid_path(settings: Settings) -> Path:
 
 
 def log_path(settings: Settings) -> Path:
-    return settings.data_dir / "server.log"
+    return settings.startup_log_path
 
 
 def _is_up(http: httpx.Client) -> bool:

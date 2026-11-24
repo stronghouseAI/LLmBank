@@ -15,9 +15,11 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from stronghouse import __version__
 from stronghouse.api.agent_routes import router as agent_router
 from stronghouse.api.errors import install_error_handlers
 from stronghouse.api.job_routes import router as job_router
+from stronghouse.api.log_routes import router as log_router
 from stronghouse.api.routes import router
 from stronghouse.config import Settings
 from stronghouse.core.jobs import Job
@@ -97,7 +99,7 @@ def build_services(settings: Settings) -> Services:
         settings.llama_server_path,
         settings.host,
         settings.engine_port,
-        log_path=settings.data_dir / "engine.log",
+        log_path=settings.engine_log_path,
     )
     downloads = DownloadManager(hub, indexer, settings.archive_dir, engine.version)
     agents = AgentStore(settings.agents_database_path)
@@ -146,12 +148,13 @@ def create_app(services: Services) -> FastAPI:
         # Never leave a llama-server holding GPU memory after the app quits.
         services.engine.stop()
 
-    app = FastAPI(title="StronghouseAI", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="StronghouseAI", version=__version__, lifespan=lifespan)
     app.state.services = services
     install_error_handlers(app)
     app.include_router(router)
     app.include_router(agent_router)
     app.include_router(job_router)
+    app.include_router(log_router)
     static_dir = resources.files("stronghouse.ui") / "static"
     app.mount("/", UiFiles(directory=str(static_dir), html=True), name="ui")
     return app
