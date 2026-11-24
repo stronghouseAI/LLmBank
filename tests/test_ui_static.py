@@ -53,3 +53,25 @@ def test_colours_are_defined_only_as_theme_tokens():
     css = (STATIC / "style.css").read_text(encoding="utf-8")
     outside_tokens = re.sub(r":root[^{]*\{[^}]*\}", "", css)
     assert not re.findall(r"#[0-9a-fA-F]{3,8}\b", outside_tokens)
+
+
+def test_chat_text_stays_selectable_while_a_reply_streams():
+    script = (STATIC / "app.js").read_text(encoding="utf-8")
+    reply_view = script[script.index("function replyView") : script.index("function addCopyButton")]
+    # Rewriting textContent replaces the text node and wipes the user's selection.
+    assert "answer.textContent +=" not in reply_view
+    assert "thoughtText.textContent =" not in reply_view
+    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    assert re.search(r"\.msg\s*\{[^}]*user-select:\s*text", css)
+
+
+def test_chat_internet_is_off_until_the_user_turns_it_on():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    toggle = re.search(r"<input[^>]*\bid=\"chat-web\"[^>]*>", html).group(0)
+    assert "checked" not in toggle
+    script = (STATIC / "app.js").read_text(encoding="utf-8")
+    # Every web call waits for the user's Allow or Deny before anything is fetched.
+    run_web_call = script[
+        script.index("async function runWebCall") : script.index("async function streamReply")
+    ]
+    assert run_web_call.index("card.decide(") < run_web_call.index('fetch("/api/chat/web"')

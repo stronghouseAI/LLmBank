@@ -236,13 +236,30 @@ main { min-width: 0; max-width: 1240px; width: 100%; padding: var(--space-5) var
   margin: auto; font-size: var(--text-sm); }
 .msg { padding: var(--space-3) var(--space-4); border-radius: var(--radius-lg); max-width: min(760px, 85%);
   white-space: pre-wrap; line-height: 1.55; }
+/* Chat text is always selectable; the Copy row under a reply is not, so a hand selection stays clean */
+.msg { user-select: text; cursor: text; }
+.msg-tools { display: flex; justify-content: flex-end; margin-top: var(--space-2); user-select: none; cursor: default; }
+.head-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
 .msg.user { align-self: flex-end; background: var(--surface-2); border: 1px solid var(--border); }
 .msg.assistant { align-self: flex-start; background: var(--surface); border: 1px solid var(--border); }
 .chat-form { position: sticky; bottom: 0; background: var(--bg); padding: var(--space-3) 0 var(--space-4);
   display: flex; flex-direction: column; gap: var(--space-2); }
 .chat-form textarea { min-height: 64px; }
 .chat-actions { display: flex; align-items: center; gap: var(--space-2); justify-content: flex-end; }
-.think-toggle { display: flex; align-items: center; gap: var(--space-2); margin: 0 auto 0 0; white-space: nowrap; }
+.think-toggle { display: flex; align-items: center; gap: var(--space-2); margin: 0; white-space: nowrap; }
+.web-toggle { margin-right: auto; }
+
+/* Internet access in chat: one card per search or page, asking before anything goes online */
+.msg.web-step { align-self: flex-start; background: var(--surface); border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--accent); font-size: var(--text-sm); white-space: normal; }
+.web-head { display: flex; align-items: center; gap: var(--space-2); font-weight: 600; }
+.web-head .icon { width: 14px; height: 14px; color: var(--accent); }
+.web-what { margin-top: var(--space-1); color: var(--muted); word-break: break-word; }
+.web-buttons { display: flex; gap: var(--space-2); margin-top: var(--space-3); user-select: none; }
+.web-found { margin-top: var(--space-2); color: var(--muted); }
+.web-found summary { cursor: pointer; }
+.web-text { white-space: pre-wrap; max-height: 220px; overflow: auto; margin-top: var(--space-2);
+  padding-left: var(--space-3); border-left: 2px solid var(--border); font-family: var(--mono); font-size: var(--text-xs); }
 
 /* Thinking indicator: shown while the model works, so a slow answer does not look frozen */
 .thinking { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--muted); font-size: var(--text-sm); }

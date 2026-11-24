@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import asdict, replace
+from datetime import date, datetime
 from pathlib import Path
 
 import httpx
@@ -12,6 +13,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from stronghouse.core.chat_transcript import ChatTurn, transcript_filename, transcript_text
+from stronghouse.core.chat_web import is_web_tool, with_web_tools
 from stronghouse.core.hub_filters import (
     ModelKind,
     SearchFilters,
@@ -25,6 +28,7 @@ from stronghouse.core.models import KvCacheType, LibraryEntry, ModelProfile, Pla
 from stronghouse.core.run_setup import forecast, plan_with_settings
 from stronghouse.services.engine import EngineError, EngineState
 from stronghouse.services.gguf_reader import GgufFormatError
+from stronghouse.services.skills import SkillError
 from stronghouse.storage.archive import UnsafePathError
 
 log = logging.getLogger(__name__)
@@ -83,6 +87,26 @@ class ChatRequest(BaseModel):
 
     model_config = ConfigDict(extra="allow")
     messages: list[dict] = Field(min_length=1)
+    # Offer the model the web tools. Off by default: chat stays offline unless asked.
+    web: bool = False
+
+
+class WebActionRequest(BaseModel):
+    """One web tool call the user approved on the Chat page."""
+
+    name: str
+    arguments: dict
+
+
+class TranscriptTurn(BaseModel):
+    role: str = Field(max_length=32)
+    content: str
+    thinking: str = ""
+
+
+class TranscriptRequest(BaseModel):
+    messages: list[TranscriptTurn] = Field(min_length=1)
+    include_thinking: bool = True
 
 
 @router.get("/hardware")
@@ -178,7 +202,7 @@ def benchmark(request: Request) -> dict:
 def chat(body: ChatRequest, request: Request) -> StreamingResponse:
     engine = request.app.state.services.engine
     try:
-        stream = engine.stream_chat(body.model_dump())
+        stream = engine.stream_chat(_chat_payload(body))
         first = next(stream)  # surface "not ready" before the response starts
     except EngineError as error:
         raise HTTPException(409, str(error)) from error
@@ -197,6 +221,48 @@ def chat(body: ChatRequest, request: Request) -> StreamingResponse:
             yield sse_error(f"The engine stopped mid-reply: {error}")
 
     return StreamingResponse(events(), media_type="text/event-stream")
+
+
+def _chat_payload(body: ChatRequest) -> dict:
+    payload = body.model_dump(exclude={"web"})
+    if body.web:
+        payload = with_web_tools(payload, date.today().isoformat())
+    return payload
+
+
+@router.post("/chat/web")
+def chat_web_action(body: WebActionRequest, request: Request) -> dict:
+    """Run one web search or page read for the Chat page.
+
+    The page calls this only after the user pressed Allow for this exact request.
+    A failed fetch is returned as text so the model can try another way.
+    """
+    if not is_web_tool(body.name):
+        raise HTTPException(400, f"Chat can only use the web tools, not '{body.name}'.")
+    log.info("chat web action", extra={"tool": body.name, "arguments": body.arguments})
+    try:
+        result = request.app.state.services.skills.execute(0, body.name, body.arguments)
+    except SkillError as error:
+        log.warning("chat web action failed: %s", error)
+        return {"result": f"Error: {error}", "ok": False}
+    return {"result": result, "ok": True}
+
+
+@router.post("/chat/transcript")
+def chat_transcript(body: TranscriptRequest, request: Request) -> dict:
+    """The conversation as plain text and a file name, for Copy chat and Export .txt.
+
+    Built here rather than in the page so the format is tested; the browser saves the file.
+    """
+    status = request.app.state.services.engine.status()
+    model = Path(status.model_path).name if status.model_path else None
+    saved_at = datetime.now()
+    turns = [ChatTurn(m.role, m.content, m.thinking) for m in body.messages]
+    log.info("chat transcript built", extra={"messages": len(turns), "model": model})
+    return {
+        "text": transcript_text(turns, model, saved_at, body.include_thinking),
+        "filename": transcript_filename(model, saved_at),
+    }
 
 
 def sse_error(message: str) -> bytes:

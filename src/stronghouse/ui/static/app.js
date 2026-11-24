@@ -501,7 +501,8 @@ async function pollEngine() {
 
 // ---------- chat ----------
 
-const chatHistory = [];
+const chatHistory = [];  // sent to the model: role and content only
+const chatTurns = [];    // shown and saved: also each reply's thinking, for Copy chat and Export
 
 function addMessage(role, text) {
   const el = document.createElement("div");
@@ -550,20 +551,48 @@ function replyView(bubble) {
   return {
     addThought(text) {
       thought += text;
-      thoughtText.textContent = thought;
+      thoughtText.append(text);
       thoughtText.scrollTop = thoughtText.scrollHeight;
       tick();
     },
-    addAnswer(text) { finishThinking(); answer.textContent += text; },
+    // append() adds a new text node instead of rewriting the text, so a selection the
+    // user made in the reply survives while more of it streams in.
+    addAnswer(text) { finishThinking(); answer.append(text); },
     answer: () => answer.textContent,
-    end(note) { finishThinking(); clearInterval(timer); if (note) answer.textContent += note; },
+    thought: () => thought,
+    end(note) { finishThinking(); clearInterval(timer); if (note) answer.append(note); addCopyButton(bubble, answer); },
+    // The model asked to go online instead of answering: keep what it said or thought,
+    // drop the bubble if there is nothing, and let the next reply continue below.
+    handOff() {
+      finishThinking();
+      clearInterval(timer);
+      if (!answer.textContent.trim() && !bubble.querySelector(".thought")) bubble.remove();
+    },
     fail(message) {
       finishThinking();
       clearInterval(timer);
       answer.classList.add("error");
-      answer.textContent += `${answer.textContent ? "\n\n" : ""}${message}`;
+      answer.append(`${answer.textContent ? "\n\n" : ""}${message}`);
     },
   };
+}
+
+// A Copy button under a finished reply. It sits outside the answer text, so selecting
+// the reply by hand does not pick up the button's label.
+function addCopyButton(bubble, answer) {
+  const tools = document.createElement("div");
+  tools.className = "msg-tools";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "secondary small";
+  button.textContent = "Copy";
+  button.title = "Copy this reply";
+  button.addEventListener("click", async () => {
+    if (await copyText(answer.textContent)) toast("Reply copied.", "info");
+    else toast("Could not copy the reply. Select the text and press Ctrl+C instead.");
+  });
+  tools.appendChild(button);
+  bubble.appendChild(tools);
 }
 
 // Some models write their reasoning inline as <think>...</think> instead of in a
@@ -608,52 +637,181 @@ function setChatBusy(busy) {
   $("#chat-stop").hidden = !busy;
 }
 
-async function sendChat(text) {
-  chatHistory.push({ role: "user", content: text });
-  addMessage("user", text);
-  const view = replyView(addMessage("assistant", ""));
+// ----- internet access: the model may ask for the web tools, the user allows each use -----
+
+const MAX_WEB_STEPS = 6;  // searches and page reads one reply may make (matches core/chat_web.py)
+const WEB_DENIED = "The user did not allow this. Do not ask again; answer from what you know and say you could not check online.";
+const WEB_ACTIONS = {
+  web_search: (args) => `Search the web for “${args.query ?? ""}”`,
+  fetch_web_page: (args) => `Open the page ${args.url ?? ""}`,
+  read_news_feed: (args) => `Read the news feed ${args.url ?? ""}`,
+};
+
+function describeWebCall(call) {
+  let args = {};
+  try { args = JSON.parse(call.arguments || "{}"); } catch { /* shown as the raw name below */ }
+  const describe = WEB_ACTIONS[call.name];
+  return { args, text: describe ? describe(args) : `Use ${call.name}` };
+}
+
+// A card in the chat that asks before the model goes online. Resolves true (Allow) or
+// false (Deny); rejects with an AbortError when the user presses Stop instead.
+function webStepCard(text) {
+  const card = document.createElement("div");
+  card.className = "msg web-step";
+  card.innerHTML = `
+    <div class="web-head"><svg class="icon" aria-hidden="true"><use href="#i-globe"/></svg><span class="web-title">The model wants to use the internet</span></div>
+    <div class="web-what"></div>
+    <div class="web-buttons"><button type="button" class="small">Allow</button><button type="button" class="secondary small">Deny</button></div>`
+    .replace(/>\s+</g, "><").trim();
+  card.querySelector(".web-what").textContent = text;
+  $("#chat-log").appendChild(card);
+  card.scrollIntoView({ block: "end" });
+  const title = card.querySelector(".web-title");
+  const buttons = card.querySelector(".web-buttons");
+  return {
+    decide(signal) {
+      const [allow, deny] = buttons.querySelectorAll("button");
+      allow.focus();
+      return new Promise((resolve, reject) => {
+        const finish = (allowed) => { buttons.remove(); resolve(allowed); };
+        allow.addEventListener("click", () => finish(true));
+        deny.addEventListener("click", () => finish(false));
+        signal.addEventListener("abort", () => {
+          buttons.remove();
+          title.textContent = "Stopped before going online";
+          reject(new DOMException("Stopped", "AbortError"));
+        }, { once: true });
+      });
+    },
+    status(text) { title.textContent = text; },
+    showResult(result, ok) {
+      const found = document.createElement("details");
+      found.className = "web-found";
+      found.innerHTML = `<summary></summary><div class="web-text"></div>`;
+      found.querySelector("summary").textContent = ok ? `What it found (${result.length.toLocaleString()} characters)` : "It did not work";
+      found.querySelector(".web-text").textContent = result;
+      card.appendChild(found);
+    },
+  };
+}
+
+// Ask about one web call, run it if allowed, and return the text the model gets back.
+async function runWebCall(call, signal) {
+  const { args, text } = describeWebCall(call);
+  const card = webStepCard(text);
+  if (!(await card.decide(signal))) {
+    card.status("You said no");
+    return { text, result: WEB_DENIED };
+  }
+  card.status("Going online…");
+  const response = await fetch("/api/chat/web", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: call.name, arguments: args }),
+    signal,
+  });
+  if (!response.ok) throw await errorFromResponse(response);
+  const { result, ok } = await response.json();
+  card.status(ok ? "Used the internet" : "Could not reach it");
+  card.showResult(result, ok);
+  return { text, result };
+}
+
+// Stream one model reply into its bubble. Returns the tool calls the model asked for
+// (empty for a plain answer). Tool calls arrive in pieces, keyed by their index.
+async function streamReply(view, body, signal) {
   const addContent = inlineThinkSplitter(view);
+  const response = await fetch("/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!response.ok) throw await errorFromResponse(response);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const calls = [];
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop();
+    for (const line of lines) {
+      const event = parseStreamLine(line);
+      if (!event) continue;
+      if (event.error) throw new Error(event.error.message || "The engine reported an error.");
+      const delta = event.choices?.[0]?.delta ?? {};
+      if (delta.reasoning_content) view.addThought(delta.reasoning_content);
+      if (delta.content) addContent(delta.content);
+      for (const part of delta.tool_calls ?? []) {
+        const call = (calls[part.index ?? 0] ??= { id: "", name: "", arguments: "" });
+        if (part.id) call.id = part.id;
+        if (part.function?.name) call.name += part.function.name;
+        if (part.function?.arguments) call.arguments += part.function.arguments;
+      }
+    }
+  }
+  return calls.filter((call) => call && call.name)
+    .map((call, index) => ({ ...call, id: call.id || `call_${index}` }));
+}
+
+async function sendChat(text) {
+  // Everything this message adds to the history, so a failed send can be undone as one.
+  const historyStart = chatHistory.length;
+  const turnsStart = chatTurns.length;
+  chatHistory.push({ role: "user", content: text });
+  chatTurns.push({ role: "user", content: text });
+  addMessage("user", text);
+  const useWeb = $("#chat-web").checked;
   chatAbort = new AbortController();
   setChatBusy(true);
-  const body = { messages: chatHistory };
-  if (!$("#chat-think").checked) {
-    // Understood by Qwen3 and other templates with a thinking switch; others ignore it.
-    body.chat_template_kwargs = { enable_thinking: false };
-  }
+  let view = null;
   try {
-    const response = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal: chatAbort.signal,
-    });
-    if (!response.ok) throw await errorFromResponse(response);
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop();
-      for (const line of lines) {
-        const event = parseStreamLine(line);
-        if (!event) continue;
-        if (event.error) throw new Error(event.error.message || "The engine reported an error.");
-        const delta = event.choices?.[0]?.delta ?? {};
-        if (delta.reasoning_content) view.addThought(delta.reasoning_content);
-        if (delta.content) addContent(delta.content);
+    for (let step = 0; ; step++) {
+      view = replyView(addMessage("assistant", ""));
+      const body = { messages: chatHistory };
+      if (!$("#chat-think").checked) {
+        // Understood by Qwen3 and other templates with a thinking switch; others ignore it.
+        body.chat_template_kwargs = { enable_thinking: false };
+      }
+      // After MAX_WEB_STEPS the tools are taken away, so the model has to answer.
+      const offerWeb = useWeb && step < MAX_WEB_STEPS;
+      if (offerWeb) body.web = true;
+      const calls = await streamReply(view, body, chatAbort.signal);
+      if (!offerWeb || !calls.length) break;
+      view.handOff();
+      const said = view.answer();
+      view = null;  // a Stop from here on has no reply bubble to finish
+      chatHistory.push({
+        role: "assistant",
+        content: said,
+        tool_calls: calls.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: c.arguments } })),
+      });
+      for (const call of calls) {
+        const { text: asked, result } = await runWebCall(call, chatAbort.signal);
+        chatHistory.push({ role: "tool", tool_call_id: call.id, content: result });
+        chatTurns.push({ role: "tool", content: `${asked}\n\n${result}` });
       }
     }
     view.end(view.answer() ? "" : "(The model sent an empty answer.)");
     chatHistory.push({ role: "assistant", content: view.answer() });
+    chatTurns.push({ role: "assistant", content: view.answer(), thinking: view.thought() });
   } catch (error) {
     const stopped = error.name === "AbortError";
+    // Between replies (while asking or going online) there is no bubble yet, so start one.
+    if (!view && !stopped) view = replyView(addMessage("assistant", ""));
     if (!stopped) view.fail(error.message);
-    else view.end(view.answer() ? "\n\n(Stopped.)" : "(Stopped.)");
-    if (stopped && view.answer() !== "(Stopped.)") chatHistory.push({ role: "assistant", content: view.answer() });
-    else chatHistory.pop();
+    else view?.end(view.answer() ? "\n\n(Stopped.)" : "(Stopped.)");
+    if (stopped && view && view.answer() !== "(Stopped.)") {
+      chatHistory.push({ role: "assistant", content: view.answer() });
+      chatTurns.push({ role: "assistant", content: view.answer(), thinking: view.thought() });
+    } else {
+      chatHistory.length = historyStart;
+      chatTurns.length = turnsStart;
+    }
   } finally {
     chatAbort = null;
     setChatBusy(false);
@@ -672,7 +830,55 @@ $("#chat-stop").addEventListener("click", () => chatAbort?.abort());
 $("#chat-input").addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); $("#chat-form").requestSubmit(); }
 });
-$("#chat-clear").addEventListener("click", () => { chatHistory.length = 0; $("#chat-log").innerHTML = ""; });
+$("#chat-clear").addEventListener("click", () => {
+  chatHistory.length = 0;
+  chatTurns.length = 0;
+  $("#chat-log").innerHTML = "";
+});
+
+// The conversation as plain text (built by the server, so the format is tested there).
+async function chatTranscript() {
+  if (!chatTurns.length) {
+    toast("Nothing to save yet. Send a message first.", "info");
+    return null;
+  }
+  const response = await fetch("/api/chat/transcript", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ messages: chatTurns }),
+  });
+  if (!response.ok) throw await errorFromResponse(response);
+  return response.json();
+}
+
+// Save text as a .txt file through the browser's own download, so nothing leaves the computer.
+function downloadText(text, filename) {
+  const url = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+$("#chat-copy-all").addEventListener("click", (event) => whileBusy(event.currentTarget, async () => {
+  try {
+    const transcript = await chatTranscript();
+    if (!transcript) return;
+    if (await copyText(transcript.text)) toast("Chat copied.", "info");
+    else toast("Could not copy the chat. Use Export .txt instead.");
+  } catch (error) { toast(error.message); }
+}));
+$("#chat-export").addEventListener("click", (event) => whileBusy(event.currentTarget, async () => {
+  try {
+    const transcript = await chatTranscript();
+    if (!transcript) return;
+    downloadText(transcript.text, transcript.filename);
+    toast(`Saved ${transcript.filename} to your Downloads folder.`, "info");
+  } catch (error) { toast(error.message); }
+}));
 
 // ---------- system ----------
 
