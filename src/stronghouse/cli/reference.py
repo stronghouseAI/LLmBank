@@ -16,14 +16,14 @@ SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             ("vault ls [SEARCH]", "List your models (id, file, size, architecture, MoE)"),
             ("vault rescan", "Re-index the archive folder, e.g. after copying models in"),
             ("vault plan MODEL", "Show how MODEL would be split between GPU and RAM"),
-            ("load MODEL", "Auto-fit and load MODEL, wait until it is ready"),
+            ("load MODEL", "Unload the current model, auto-fit MODEL, wait until ready"),
             ("unload", "Unload the model and free GPU memory"),
         ],
     ),
     (
         "LOAD OPTIONS  for load and vault plan",
         [
-            ("MODEL", "Vault id (shai load 3) or part of the name (shai load qwen3-8b)"),
+            ("MODEL", "Vault id (shai load 3) or part of the name (qwen3-8b, qwen3_8b)"),
             ("--ctx N", "Context length in tokens (default 8192)"),
             ("--kv q8_0", "Half-size KV cache, for longer context (default f16)"),
             ("--n-cpu-moe N", "Put the experts of the first N blocks in RAM (MoE models)"),
@@ -62,7 +62,7 @@ SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
     (
         "CHAT  with the loaded model",
         [
-            ("chat", "Talk back and forth. /clear starts over, /exit or Ctrl+D quits"),
+            ("chat [MESSAGE]", "Talk back and forth. /clear starts over, /exit or Ctrl+D quits"),
             ('ask "QUESTION"', "One question, one answer"),
             ("  --no-think", "Answer straight away, skip thinking (Qwen3)"),
             ("  --show-thinking", "Print the model's thinking as it goes"),
@@ -82,7 +82,7 @@ SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
         [
             ("status", "Engine state, loaded model and its plan, GPU and memory"),
             ("system", "GPU, memory and CPU"),
-            ("serve", "Run the app in this terminal and open the web UI"),
+            ("serve", "Open the web UI, starting the app here if it is not running"),
             ("stop", "Stop the background app (also unloads the model)"),
             ("help", "This page. Details of one command: shai COMMAND --help"),
         ],

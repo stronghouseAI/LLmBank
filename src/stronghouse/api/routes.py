@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import httpx
@@ -23,7 +23,7 @@ from stronghouse.core.hub_filters import (
 from stronghouse.core.launch_args import ExtraArgsError
 from stronghouse.core.models import KvCacheType, LibraryEntry, ModelProfile, PlanSettings
 from stronghouse.core.run_setup import forecast, plan_with_settings
-from stronghouse.services.engine import EngineError
+from stronghouse.services.engine import EngineError, EngineState
 from stronghouse.services.gguf_reader import GgufFormatError
 from stronghouse.storage.archive import UnsafePathError
 
@@ -32,6 +32,10 @@ router = APIRouter(prefix="/api")
 
 DEFAULT_CONTEXT = 8192
 MAX_CONTEXT = 1_048_576
+LOADED_MODEL_NOTE = (
+    "A model is loaded and using GPU memory. Loading this one unloads it first,"
+    " so the real plan may put more on the GPU."
+)
 
 
 class PlanRequest(BaseModel):
@@ -124,6 +128,8 @@ def make_plan(entry_id: int, body: PlanRequest, request: Request) -> dict:
     profile = _load_profile(request, entry_id)
     hardware = services.probe_hardware()
     plan = _plan_for(request, profile, body)
+    if services.engine.status().state is not EngineState.STOPPED:
+        plan = replace(plan, notes=[*plan.notes, LOADED_MODEL_NOTE])
     command = services.engine_command_preview(Path(entry.path), plan)
     outlook = forecast(profile, plan, hardware, entry.filename, services.settings.memory_speeds)
     return {"plan": asdict(plan), "command": command, "forecast": asdict(outlook)}
@@ -133,11 +139,17 @@ def make_plan(entry_id: int, body: PlanRequest, request: Request) -> dict:
 def start_engine(body: StartRequest, request: Request) -> dict:
     services = request.app.state.services
     entry = _entry(request, body.model_id)
-    plan = _plan_for(request, _load_profile(request, body.model_id), body)
+    profile = _load_profile(request, body.model_id)
+    services.engine.stop()  # free its GPU memory first, or the plan sees a full GPU
+    plan = _plan_for(request, profile, body)
+    outlook = forecast(
+        profile, plan, services.probe_hardware(), entry.filename, services.settings.memory_speeds
+    )
     try:
-        return asdict(services.engine.start(Path(entry.path), plan))
+        started = services.engine.start(Path(entry.path), plan)
     except EngineError as error:
         raise HTTPException(503, str(error)) from error
+    return {**asdict(started), "forecast": asdict(outlook)}
 
 
 @router.post("/engine/stop")

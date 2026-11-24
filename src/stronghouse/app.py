@@ -79,6 +79,7 @@ class Services:
             return entry.filename
         try:
             profile = self.indexer.profile(Path(entry.path))
+            self.engine.stop()  # free its GPU memory first, or the plan sees a full GPU
             plan = plan_with_settings(
                 profile, self.probe_hardware(), job.plan_settings, self.settings.extra_args
             )

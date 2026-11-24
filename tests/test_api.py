@@ -34,7 +34,8 @@ class FakeEngine:
         from stronghouse.services.engine import EngineState, EngineStatus
 
         state = EngineState.LOADING if self.started else EngineState.STOPPED
-        return EngineStatus(state, None, None, [], [])
+        model_path, plan = self.started or (None, None)
+        return EngineStatus(state, model_path and str(model_path), plan, [], [])
 
     def benchmark(self):
         raise EngineError("No model is loaded and ready yet.")
@@ -102,6 +103,20 @@ def test_start_engine_uses_plan(client):
     model_path, plan = services.engine.started
     assert plan.context_size == 8192
     assert model_path.name == "m.gguf"
+
+
+def test_loading_a_model_unloads_the_old_one_before_planning(client):
+    """The loaded model's GPU memory must not count as taken when planning the next one."""
+    test_client, services = client
+    services.probe_hardware = lambda: HardwareProfile(
+        "GPU", 8 * GIB, GIB // 2 if services.engine.started else 8 * GIB, 32 * GIB, 32 * GIB, 8
+    )
+    entry_id = test_client.get("/api/library").json()[0]["id"]
+    first = test_client.post("/api/engine/start", json={"model_id": entry_id}).json()
+    preview = test_client.post(f"/api/library/{entry_id}/plan", json={}).json()["plan"]
+    second = test_client.post("/api/engine/start", json={"model_id": entry_id}).json()
+    assert second["plan"] == first["plan"]
+    assert any("A model is loaded" in note for note in preview["notes"])
 
 
 def test_benchmark_without_model_is_a_clear_error(client):

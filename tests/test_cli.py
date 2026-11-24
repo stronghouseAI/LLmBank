@@ -1,6 +1,7 @@
 """The terminal client (`shai`), run against the real app with a fake engine and hub."""
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -42,7 +43,8 @@ class FakeEngine:
 
     def status(self):
         state = EngineState.READY if self.started else EngineState.STOPPED
-        return EngineStatus(state, None, None, [], [])
+        model_path, plan = self.started or (None, None)
+        return EngineStatus(state, model_path and str(model_path), plan, [], [])
 
     def stream_chat(self, payload):
         self.chat_bodies.append(payload)
@@ -122,6 +124,15 @@ def test_unknown_or_ambiguous_model_names_explain_themselves(shai):
     assert code == 1 and "No model in your vault" in out
     code, out = run("vault", "load", "q4")
     assert code == 1 and "matches several models" in out
+
+
+def test_tables_line_up_with_colour_on(monkeypatch):
+    from stronghouse.cli import render
+
+    monkeypatch.setattr(render, "use_colour", lambda stream=None: True)
+    text = render.table(["id", "file"], [["1234", render.paint("qwen3-8b.gguf", "bold")]])
+    header, row = (re.sub(r"\033\[[0-9;]*m", "", line) for line in text.splitlines())
+    assert header.index("FILE") == row.index("qwen3")
 
 
 def test_load_waits_until_ready_then_unload(shai):
@@ -206,6 +217,26 @@ def test_single_dash_help_on_a_command(shai):
     with pytest.raises(SystemExit) as exit_info:
         run("discover", "-help")
     assert exit_info.value.code == 0
+
+
+def test_names_match_loosely_and_chat_takes_a_first_message(shai):
+    run, services = shai
+    code, out = run("load", "QWEN3_8B")  # file is qwen3-8b-q4.gguf
+    assert code == 0 and "Ready." in out
+    code, out = run("chat", "how", "are", "you?", answers=["/exit"])
+    assert code == 0 and "391" in out
+    assert services.engine.chat_bodies[-1]["messages"][0]["content"] == "how are you?"
+
+
+def test_stronghouse_reuses_a_running_app_instead_of_clashing_on_the_port(monkeypatch):
+    import stronghouse.__main__ as entry
+
+    opened = []
+    monkeypatch.setattr(entry, "app_is_running", lambda _settings: True)
+    monkeypatch.setattr(entry.webbrowser, "open", opened.append)
+    monkeypatch.setattr(entry.uvicorn, "run", lambda *a, **k: pytest.fail("started a second app"))
+    entry.serve()
+    assert opened == ["http://127.0.0.1:8765"]
 
 
 def test_plan_shows_speed_forecast_and_flags(shai):

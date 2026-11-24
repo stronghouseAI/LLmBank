@@ -85,10 +85,10 @@ def vault_plan(api: ApiClient, args: argparse.Namespace) -> None:
 
 def vault_load(api: ApiClient, args: argparse.Namespace) -> None:
     entry = _find_model(api, args.model)
-    plan = api.post(f"/library/{entry['id']}/plan", _plan_body(args))
-    _print_plan(entry, plan["plan"], plan["command"])
-    _print_forecast(plan["forecast"])
-    api.post("/engine/start", {**_plan_body(args), "model_id": entry["id"]})
+    # The server unloads the current model before planning, so print the plan it used.
+    started = api.post("/engine/start", {**_plan_body(args), "model_id": entry["id"]})
+    _print_plan(entry, started["plan"], started["command"])
+    _print_forecast(started["forecast"])
     print(paint("Loading", "yellow") + " (big models take a minute)", end="", flush=True)
     deadline = time.monotonic() + LOAD_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
@@ -207,9 +207,14 @@ def ask(api: ApiClient, args: argparse.Namespace) -> None:
 def chat(api: ApiClient, args: argparse.Namespace) -> None:
     print(paint("Chat with the loaded model. /clear starts over, /exit or Ctrl+D quits.", "dim"))
     messages: list[dict] = []
+    first = " ".join(args.prompt).strip()  # `shai chat how are you` opens with that message
     while True:
         try:
-            text = prompt_user(paint("you> ", "brass")).strip()
+            if first:
+                text, first = first, ""
+                print(paint("you> ", "brass") + text)
+            else:
+                text = prompt_user(paint("you> ", "brass")).strip()
         except EOFError:
             print()
             return
@@ -442,9 +447,9 @@ def _find_model(api: ApiClient, query: str) -> dict:
     if query.isdigit():
         match = [e for e in entries if e["id"] == int(query)]
     else:
-        needle = query.lower()
+        needle = _loose(query)
         match = [
-            e for e in entries if needle in e["filename"].lower() or needle in e["repo_id"].lower()
+            e for e in entries if needle in _loose(e["filename"]) or needle in _loose(e["repo_id"])
         ]
     if len(match) == 1:
         return match[0]
@@ -452,6 +457,11 @@ def _find_model(api: ApiClient, query: str) -> dict:
         raise ApiError(f'No model in your vault matches "{query}". List them with: shai vault ls')
     names = "\n".join(f"  {e['id']}  {e['filename']}" for e in match)
     raise ApiError(f'"{query}" matches several models. Use the id:\n{names}')
+
+
+def _loose(name: str) -> str:
+    """Lower case without separators, so qwen3_8b, Qwen3-8B and "qwen3 8b" all match."""
+    return "".join(char for char in name.lower() if char.isalnum())
 
 
 def _find_agent(api: ApiClient, query: str) -> dict:
@@ -535,7 +545,19 @@ def build_parser() -> argparse.ArgumentParser:
         ' · shai chat · shai quest Newsie "UK headlines to ~/news.md"',
     )
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
+    for add_section in (
+        _add_vault,
+        _add_discover,
+        _add_chat,
+        _add_guild,
+        _add_job_commands,
+        _add_system,
+    ):
+        add_section(commands)
+    return parser
 
+
+def _add_vault(commands: argparse._SubParsersAction) -> None:
     vault = commands.add_parser("vault", help="models on your disk").add_subparsers(
         dest="action", required=True
     )
@@ -561,6 +583,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_plan_flags(commands.choices["load"], with_model=True)
     commands.add_parser("unload", help="same as: vault unload").set_defaults(handler=vault_unload)
 
+
+def _add_discover(commands: argparse._SubParsersAction) -> None:
     disc = commands.add_parser("discover", help="search GGUF models on Hugging Face")
     disc.add_argument("query", nargs="+", help="what to search for, e.g. qwen3 30b")
     disc.add_argument(
@@ -588,13 +612,16 @@ def build_parser() -> argparse.ArgumentParser:
     dl.add_argument("filename")
     dl.set_defaults(handler=get)
 
+
+def _add_chat(commands: argparse._SubParsersAction) -> None:
     for name, handler, text in (
         ("chat", chat, "talk to the loaded model"),
         ("ask", ask, "ask one question"),
     ):
         sub = commands.add_parser(name, help=text)
-        if name == "ask":
-            sub.add_argument("prompt", nargs="+")
+        sub.add_argument(
+            "prompt", nargs="+" if name == "ask" else "*", help="your message (optional for chat)"
+        )
         sub.add_argument(
             "--no-think", action="store_true", help="answer directly, skip thinking (Qwen3)"
         )
@@ -602,6 +629,9 @@ def build_parser() -> argparse.ArgumentParser:
         sub.set_defaults(handler=handler)
 
     commands.add_parser("bench", help="speed test the loaded model").set_defaults(handler=bench)
+
+
+def _add_guild(commands: argparse._SubParsersAction) -> None:
     commands.add_parser("agents", help="list your agents").set_defaults(handler=agents_ls)
     qst = commands.add_parser("quest", help="send an agent on a quest (asks before every action)")
     qst.add_argument("agent", help="agent name or id")
@@ -609,13 +639,13 @@ def build_parser() -> argparse.ArgumentParser:
     qst.add_argument("--reviewer", help="a second agent who checks the work")
     qst.set_defaults(handler=quest)
 
-    _add_job_commands(commands)
+
+def _add_system(commands: argparse._SubParsersAction) -> None:
     commands.add_parser("status", help="engine, model and hardware").set_defaults(handler=status)
     commands.add_parser("system", help="GPU, memory and CPU").set_defaults(handler=system)
     commands.add_parser("stop", help="stop the background app (unloads the model)")
-    serve = commands.add_parser("serve", help="run the app in this terminal (the web UI)")
+    serve = commands.add_parser("serve", help="open the web UI (starts the app if needed)")
     serve.add_argument("--no-browser", action="store_true")
-    return parser
 
 
 def _add_job_commands(commands) -> None:
