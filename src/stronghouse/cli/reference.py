@@ -84,6 +84,8 @@ SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             ("system", "GPU, memory and CPU"),
             ("serve", "Open the web UI, starting the app here if it is not running"),
             ("stop", "Stop the background app (also unloads the model)"),
+            ("logs [LOG]", "All logs with secrets hidden, ready to paste to Claude"),
+            ("  --lines N / --problems", "Last N lines (default 200) / only warnings and errors"),
             ("help", "This page. Details of one command: shai COMMAND --help"),
         ],
     ),

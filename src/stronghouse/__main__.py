@@ -14,9 +14,11 @@ import webbrowser
 
 import uvicorn
 
+from stronghouse import __version__
 from stronghouse.app import build_services, create_app
 from stronghouse.cli.client import app_is_running
 from stronghouse.config import load_settings
+from stronghouse.services.log_files import configure_logging
 
 BROWSER_OPEN_DELAY_SECONDS = 1.5
 
@@ -30,8 +32,11 @@ def serve(no_browser: bool = False) -> None:
         if not no_browser:
             webbrowser.open(url)
         return
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    configure_logging(settings)
+    logging.getLogger(__name__).info(
+        "StronghouseAI %s starting",
+        __version__,
+        extra={"url": url, "data_dir": str(settings.data_dir)},
     )
     app = create_app(build_services(settings))
 

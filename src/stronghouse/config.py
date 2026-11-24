@@ -22,6 +22,11 @@ GB = 1_000_000_000
 _DEFAULT_GPU_GBPS = "180"
 _DEFAULT_RAM_GBPS = "40"
 _DEFAULT_DISK_GBPS = "2"
+# app.log is rotated at this size, keeping this many old files (app.log.1, app.log.2).
+LOG_FILE_MAX_BYTES = 5_000_000
+LOG_FILE_BACKUPS = 2
+# The Logs page reads at most this much from the end of a log file.
+LOG_READ_MAX_BYTES = 2_000_000
 
 
 def _default_speeds() -> MemorySpeeds:
@@ -67,6 +72,30 @@ class Settings:
     @property
     def agents_database_path(self) -> Path:
         return self.data_dir / "agents.sqlite3"
+
+    @property
+    def app_log_path(self) -> Path:
+        """Everything the app server logs (rotated, see LOG_FILE_MAX_BYTES)."""
+        return self.data_dir / "app.log"
+
+    @property
+    def engine_log_path(self) -> Path:
+        """llama-server output for the model loaded last."""
+        return self.data_dir / "engine.log"
+
+    @property
+    def startup_log_path(self) -> Path:
+        """Terminal output of the app when `shai` starts it in the background."""
+        return self.data_dir / "server.log"
+
+    def log_path(self, file: str) -> Path:
+        """The path of a log by its short name: "app", "engine" or "startup"."""
+        paths = {
+            "app": self.app_log_path,
+            "engine": self.engine_log_path,
+            "startup": self.startup_log_path,
+        }
+        return paths[file]
 
 
 def load_settings(environ: dict[str, str] | None = None) -> Settings:

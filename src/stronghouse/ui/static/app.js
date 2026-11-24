@@ -66,6 +66,43 @@ async function whileBusy(button, action) {
   try { return await action(); } finally { button.disabled = false; }
 }
 
+// Put text on the clipboard. navigator.clipboard needs a secure page (127.0.0.1 is one);
+// if the app is opened by another address, fall back to the older copy command.
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    const copied = document.execCommand("copy");
+    area.remove();
+    return copied;
+  }
+}
+
+async function copyWithToast(text, what) {
+  if (await copyText(text)) toast(`${what} copied. Paste it into your chat with Claude.`, "info");
+  else toast(`Could not copy the ${what.toLowerCase()}. Select the text and press Ctrl+C instead.`);
+}
+
+// Update a live log box without breaking what the user is doing in it: leave it alone
+// while text in it is selected (so it can be copied), and only follow the end of the
+// log if the user had scrolled to the bottom.
+function setLogText(el, text) {
+  if (el.textContent === text) return;
+  const selection = window.getSelection();
+  if (selection && !selection.isCollapsed && el.contains(selection.anchorNode)) return;
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+  el.textContent = text;
+  if (atBottom) el.scrollTop = el.scrollHeight;
+}
+
 // In-app replacement for prompt() and confirm(). Resolves to the typed text (with
 // `input`), true (confirm), or null when cancelled.
 function ask({ title, message = "", input = null, confirmText = "OK", danger = false }) {
@@ -431,6 +468,12 @@ $("#run-bench").addEventListener("click", (event) => whileBusy(event.currentTarg
     : "";
 }));
 
+$("#run-log-copy").addEventListener("click", (event) => whileBusy(event.currentTarget, async () => {
+  // The server hides tokens and passwords, so the copy is safe to paste anywhere.
+  const engineLog = await withErrors(() => api("/logs/engine?lines=500"));
+  if (engineLog) await copyWithToast(engineLog.copy_text, "Engine log");
+}));
+
 function showEngineState(state, model = "", title = "") {
   const pill = $("#engine-pill");
   pill.className = `pill ${state}`;
@@ -447,7 +490,7 @@ async function pollEngine() {
   const model = status.model_path ? status.model_path.split("/").pop() : "";
   showEngineState(status.state, model);
   const logTail = status.log_tail ?? [];
-  $("#run-log").textContent = logTail.join("\n");
+  setLogText($("#run-log"), logTail.join("\n"));
   const outOfMemory = status.state === "crashed" && logTail.some((l) => /failed to allocate/i.test(l));
   if (outOfMemory && !pollEngine.warned) {
     pollEngine.warned = true;
