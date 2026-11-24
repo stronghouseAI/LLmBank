@@ -29,6 +29,7 @@ Inference itself is done by [llama.cpp](https://github.com/ggml-org/llama.cpp)'s
 - **OpenAI-compatible endpoint**: while a model is loaded, `http://127.0.0.1:8766/v1` works with Open WebUI and other tools.
 - **Agents (Agent shop)**: build your own agents from the bottom up. Give each one a name, a job and instructions, any of the 15 skills it needs (files, web and news, PDFs, desktop, calculator and clock), a Temperature and a Max steps limit. Give them tasks using the loaded model. Every action on your computer (reading, writing, searching files, running commands, going online) waits for your **Allow once** or **Deny**. Pair an agent with a reviewer for a team of two. Agents keep notes between tasks and can be exported and imported as `.agent.json` cards. See `docs/adr/0006-skill-library.md` and `0007-agents-built-from-skills.md`; the look is in `0010-studio-ui-and-error-contract.md`. PDF reading needs `poppler` and clipboard copy needs `wl-clipboard` (both one `pacman -S` away).
 - **System**: GPU, RAM, CPU and engine version.
+- **Logs**: the app, engine, jobs, agents and startup logs in one place. **Copy** or **Copy all logs** puts them on the clipboard ready to paste to Claude, with tokens and passwords hidden. `shai logs` does the same in the terminal, even when the app will not start. See `docs/adr/0012-log-window.md`.
 
 ## Terminal version (`shai`)
 
@@ -51,6 +52,7 @@ shai vault plan glm-4.5-air            # speed estimate and the best quantizatio
 shai job add "Write a full business plan for ..." --model glm   # queue it, walk away
 shai job ls / shai job show 3          # check on jobs; answers are also saved as files
 shai status                            # engine, model, GPU and memory
+shai logs --problems                   # warnings and errors from every log, ready to paste
 shai unload / shai stop                # free the GPU / stop the background app
 ```
 
@@ -80,7 +82,7 @@ All settings are environment variables (defined in one place, `src/stronghouse/c
 | Variable | Default | Purpose |
 |---|---|---|
 | `STRONGHOUSE_ARCHIVE_DIR` | `~/.local/share/stronghouse/archive` | Where models are stored. Point it at your external drive. |
-| `STRONGHOUSE_DATA_DIR` | `~/.local/share/stronghouse` | Library index and engine log. |
+| `STRONGHOUSE_DATA_DIR` | `~/.local/share/stronghouse` | Library index and logs (`app.log`, `engine.log`, `server.log`). |
 | `STRONGHOUSE_LLAMA_SERVER` | `llama-server` | Path to the llama-server binary. |
 | `STRONGHOUSE_PORT` / `STRONGHOUSE_ENGINE_PORT` | `8765` / `8766` | App and engine ports. |
 | `STRONGHOUSE_EXTRA_ARGS` | unset | llama-server flags added to every launch, e.g. `-b 4096 -ub 1024`. |
