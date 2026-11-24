@@ -53,13 +53,26 @@ def validate_agent(agent: Agent) -> None:
 
 
 def temperature_for(agent: Agent) -> float:
+    return temperature_for_creativity(agent.creativity)
+
+
+def temperature_for_creativity(creativity: int) -> float:
     """Creativity 1 -> 0.1 (precise), 10 -> 1.0 (inventive)."""
-    return round(agent.creativity / 10, 2)
+    return round(creativity / 10, 2)
 
 
 def max_steps_for(agent: Agent) -> int:
+    return max_steps_for_diligence(agent.diligence)
+
+
+def max_steps_for_diligence(diligence: int) -> int:
     """Diligence 1 -> 4 steps, 10 -> 22 steps. Each step is one model reply."""
-    return 2 + agent.diligence * 2
+    return 2 + diligence * 2
+
+
+def tasks_done(agent: Agent) -> int:
+    """Finished quests, counted from xp (each one earns XP_PER_QUEST)."""
+    return agent.xp // XP_PER_QUEST
 
 
 def system_prompt_for(agent: Agent, journal: list[str], home_folder: str) -> str:

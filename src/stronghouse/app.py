@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from stronghouse.api.agent_routes import router as agent_router
+from stronghouse.api.errors import install_error_handlers
 from stronghouse.api.routes import router
 from stronghouse.config import Settings
 from stronghouse.core.launch_args import build_server_args
@@ -98,6 +99,7 @@ def create_app(services: Services) -> FastAPI:
 
     app = FastAPI(title="StronghouseAI", version="0.1.0", lifespan=lifespan)
     app.state.services = services
+    install_error_handlers(app)
     app.include_router(router)
     app.include_router(agent_router)
     static_dir = resources.files("stronghouse.ui") / "static"

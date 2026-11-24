@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -9,7 +10,7 @@ from pathlib import Path
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from stronghouse.core.hub_filters import (
     ModelKind,
@@ -51,6 +52,14 @@ class TagsRequest(BaseModel):
 class DownloadRequest(BaseModel):
     repo_id: str
     filename: str
+
+
+class ChatRequest(BaseModel):
+    """An OpenAI-style chat request. Extra fields (temperature, chat_template_kwargs...)
+    are passed through to llama-server untouched."""
+
+    model_config = ConfigDict(extra="allow")
+    messages: list[dict] = Field(min_length=1)
 
 
 @router.get("/hardware")
@@ -132,22 +141,33 @@ def benchmark(request: Request) -> dict:
 
 
 @router.post("/chat")
-async def chat(request: Request) -> StreamingResponse:
+def chat(body: ChatRequest, request: Request) -> StreamingResponse:
     engine = request.app.state.services.engine
-    payload = await request.json()
     try:
-        stream = engine.stream_chat(payload)
+        stream = engine.stream_chat(body.model_dump())
         first = next(stream)  # surface "not ready" before the response starts
     except EngineError as error:
         raise HTTPException(409, str(error)) from error
     except httpx.HTTPError as error:
         raise HTTPException(502, f"Engine did not answer: {error}") from error
+    except StopIteration:
+        raise HTTPException(502, "Engine closed the reply before sending anything.") from None
 
-    def body():
+    def events():
         yield first
-        yield from stream
+        try:
+            yield from stream
+        except httpx.HTTPError as error:
+            # Headers are already sent, so report the failure as a final stream event.
+            log.warning("Chat stream broke off: %s", error)
+            yield sse_error(f"The engine stopped mid-reply: {error}")
 
-    return StreamingResponse(body(), media_type="text/event-stream")
+    return StreamingResponse(events(), media_type="text/event-stream")
+
+
+def sse_error(message: str) -> bytes:
+    """A server-sent event the chat UI shows as an error instead of a silent cut-off."""
+    return f"data: {json.dumps({'error': {'message': message}})}\n\n".encode()
 
 
 @router.get("/hub/search")

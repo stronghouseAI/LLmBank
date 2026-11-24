@@ -16,6 +16,9 @@ from stronghouse.core.agents import (
     Quest,
     agent_from_card,
     agent_to_card,
+    max_steps_for_diligence,
+    tasks_done,
+    temperature_for_creativity,
     validate_agent,
 )
 from stronghouse.services.quest_runner import QuestError
@@ -48,6 +51,13 @@ def catalog() -> dict:
         "skills": [asdict(spec) for spec in SKILLS.values()],
         "recommended_max_skills": RECOMMENDED_MAX_SKILLS,
         "stat_range": [STAT_MIN, STAT_MAX],
+        # What each slider position means, so the UI can show real numbers.
+        "temperature_by_creativity": {
+            v: temperature_for_creativity(v) for v in range(STAT_MIN, STAT_MAX + 1)
+        },
+        "max_steps_by_diligence": {
+            v: max_steps_for_diligence(v) for v in range(STAT_MIN, STAT_MAX + 1)
+        },
     }
 
 
@@ -163,7 +173,7 @@ def _valid(agent: Agent) -> Agent:
 
 
 def _agent_json(agent: Agent) -> dict:
-    return {**asdict(agent), "level": agent.level}
+    return {**asdict(agent), "level": agent.level, "tasks_done": tasks_done(agent)}
 
 
 def _quest_json(quest: Quest) -> dict:
