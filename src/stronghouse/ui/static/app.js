@@ -14,36 +14,60 @@ function escapeHtml(value) {
 }
 
 function formatBytes(bytes) {
-  if (!bytes) return "0 B";
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
   const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   return `${(bytes / 1024 ** i).toFixed(i >= 3 ? 1 : 0)} ${units[i]}`;
 }
 
-function toast(message) {
+const OFFLINE_MESSAGE = "Can't reach StronghouseAI. Is the app still running in your terminal?";
+
+// kind: "error" (default, stays longer) or "info".
+function toast(message, kind = "error") {
   const el = $("#toast");
   el.textContent = message;
+  el.className = `toast ${kind}`;
   el.hidden = false;
   clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => { el.hidden = true; }, 5000);
+  toast.timer = setTimeout(() => { el.hidden = true; }, kind === "error" ? 7000 : 4000);
+}
+
+// The server sends {"detail": "<sentence>"}; older or proxy errors may not, so fall back.
+async function errorFromResponse(response) {
+  const body = await response.json().catch(() => ({}));
+  const detail = typeof body.detail === "string" ? body.detail : "";
+  return new Error(detail || `${response.status} ${response.statusText || "error"}`);
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(`/api${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
-  if (!response.ok) {
-    const detail = await response.json().catch(() => ({}));
-    throw new Error(detail.detail || `${response.status} ${response.statusText}`);
+  let response;
+  try {
+    response = await fetch(`/api${path}`, {
+      headers: { "Content-Type": "application/json" },
+      ...options,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    });
+  } catch (error) {
+    if (error.name === "AbortError") throw error;
+    throw new Error(OFFLINE_MESSAGE);
   }
+  if (!response.ok) throw await errorFromResponse(response);
   return response.json();
 }
 
 async function withErrors(action) {
   try { return await action(); } catch (error) { toast(error.message); return undefined; }
 }
+
+// Run an action with its button disabled, so a double click cannot send it twice.
+async function whileBusy(button, action) {
+  if (button.disabled) return undefined;
+  button.disabled = true;
+  try { return await action(); } finally { button.disabled = false; }
+}
+
+// Last line of defence: an unexpected script error becomes a message, not a dead page.
+window.addEventListener("unhandledrejection", (event) => toast(event.reason?.message || String(event.reason)));
 
 // ---------- tabs ----------
 
@@ -89,7 +113,8 @@ async function loadLibrary() {
 }
 
 $("#library-list").addEventListener("click", async (event) => {
-  const target = event.target;
+  const target = event.target.closest("button");
+  if (!target) return;
   if (target.dataset.run) {
     await loadRunModels(target.dataset.run);
     document.querySelector('.tabs button[data-tab="run"]').click();
@@ -101,8 +126,8 @@ $("#library-list").addEventListener("click", async (event) => {
     }));
     loadLibrary();
   } else if (target.dataset.forget) {
-    await withErrors(() => api(`/library/${target.dataset.forget}`, { method: "DELETE" }));
-    toast("Removed from the list. The file is still on disk.");
+    const removed = await withErrors(() => api(`/library/${target.dataset.forget}`, { method: "DELETE" }));
+    if (removed) toast("Removed from the list. The file is still on disk.", "info");
     loadLibrary();
   }
 });
@@ -111,11 +136,11 @@ $("#library-search").addEventListener("input", () => {
   clearTimeout(loadLibrary.timer);
   loadLibrary.timer = setTimeout(loadLibrary, 250);
 });
-$("#library-rescan").addEventListener("click", async () => {
+$("#library-rescan").addEventListener("click", (event) => whileBusy(event.currentTarget, async () => {
   const result = await withErrors(() => api("/library/rescan", { method: "POST" }));
-  if (result) toast(`Indexed ${result.indexed} model(s).`);
-  loadLibrary();
-});
+  if (result) toast(`Indexed ${result.indexed} model(s).`, "info");
+  await loadLibrary();
+}));
 
 // ---------- discover (Hugging Face) ----------
 
@@ -148,9 +173,11 @@ async function searchHub() {
         ${model.size_label ? `<span class="badge">${escapeHtml(model.size_label)}</span>` : ""}
         ${model.is_moe ? '<span class="badge moe">MoE</span>' : ""}
         ${KIND_NAMES[model.kind] ? `<span class="badge">${KIND_NAMES[model.kind]}</span>` : ""}</span>
-      <span class="muted">${model.downloads.toLocaleString()} ↓</span>
+      <span class="muted">${(model.downloads ?? 0).toLocaleString()} ↓</span>
     </div>`).join("") || '<p class="muted">No GGUF models match. Try fewer filters.</p>';
 }
+
+const UNKNOWN_FIT = ["fit unknown", "Could not compare this file with your hardware."];
 
 function renderHubFiles() {
   const { repo, files } = hubFiles;
@@ -158,13 +185,16 @@ function renderHubFiles() {
   const hideTooBig = $("#hub-fits").checked;
   const visible = files.filter((f) => !(hideTooBig && f.fit === "too_big"));
   const hidden = files.length - visible.length;
-  $("#hub-files").innerHTML = visible.map((file) => `
+  $("#hub-files").innerHTML = visible.map((file) => {
+    const [fitLabel, fitHelp] = FIT_NAMES[file.fit] ?? UNKNOWN_FIT;
+    return `
     <div class="item">
       <span><span class="name">${escapeHtml(file.filename)}</span><br>
-        <span class="badge fit-${file.fit}" title="${FIT_NAMES[file.fit][1]}">${FIT_NAMES[file.fit][0]}</span></span>
+        <span class="badge fit-${escapeHtml(file.fit)}" title="${fitHelp}">${fitLabel}</span></span>
       <span>${formatBytes(file.size_bytes)}
         <button data-download="${escapeHtml(file.filename)}" data-repo="${escapeHtml(repo)}">Archive</button></span>
-    </div>`).join("")
+    </div>`;
+  }).join("")
     + (hidden ? `<p class="muted">${hidden} file(s) too big for this computer are hidden.</p>` : "")
     || '<p class="muted">No .gguf files in this repo.</p>';
 }
@@ -188,12 +218,18 @@ $("#hub-results").addEventListener("click", async (event) => {
 $("#hub-files").addEventListener("click", async (event) => {
   const button = event.target.closest("[data-download]");
   if (!button) return;
+  if (button.disabled) return;
   button.disabled = true;
   button.textContent = "Archiving…";
-  await withErrors(() => api("/downloads", {
+  const job = await withErrors(() => api("/downloads", {
     method: "POST", body: { repo_id: button.dataset.repo, filename: button.dataset.download },
   }));
-  toast("Download started.");
+  if (!job) {
+    button.disabled = false;
+    button.textContent = "Archive";
+    return;
+  }
+  toast("Download started.", "info");
   pollDownloads();
 });
 
@@ -232,7 +268,7 @@ async function showProfile() {
   const p = await withErrors(() => api(`/library/${id}/profile`));
   if (!p) return;
   $("#run-profile").innerHTML = `${escapeHtml(p.architecture)} · ${p.block_count} blocks ·
-    trained context ${p.context_length.toLocaleString()}<br>
+    trained context ${(p.context_length ?? 0).toLocaleString()}<br>
     ${p.is_moe ? `MoE: ${p.expert_count} experts, ${p.experts_used} active per token ·
     experts ${formatBytes(p.expert_bytes)}, shared ${formatBytes(p.dense_bytes)}` : `Dense model · ${formatBytes(p.dense_bytes)}`}`;
 }
@@ -252,7 +288,7 @@ function renderPlan({ plan, command }) {
   const total = plan.estimated_gpu_bytes + plan.estimated_cpu_bytes || 1;
   const gpuShare = (100 * plan.estimated_gpu_bytes) / total;
   $("#run-plan-view").innerHTML = `
-    <div><strong>${escapeHtml(plan.strategy.replace("_", " "))}</strong> ·
+    <div><strong>${escapeHtml(plan.strategy.replaceAll("_", " "))}</strong> ·
       context ${plan.context_size.toLocaleString()} · GPU layers ${plan.n_gpu_layers} ·
       experts on CPU ${plan.n_cpu_moe}</div>
     <div class="meter"><div class="gpu" style="width:${gpuShare}%"></div><div class="cpu" style="flex:1"></div></div>
@@ -261,47 +297,62 @@ function renderPlan({ plan, command }) {
     <details><summary>Command</summary><code>${escapeHtml(command.join(" "))}</code></details>`;
 }
 
-$("#run-plan").addEventListener("click", async () => {
+function selectedModelId() {
   const id = $("#run-model").value;
+  if (!id) toast("Pick a model first. Your vault is empty? Archive one from Discover.");
+  return id;
+}
+
+$("#run-plan").addEventListener("click", (event) => whileBusy(event.currentTarget, async () => {
+  const id = selectedModelId();
   if (!id) return;
   const result = await withErrors(() => api(`/library/${id}/plan`, { method: "POST", body: planBody() }));
   if (result) renderPlan(result);
-});
+}));
 
-$("#run-start").addEventListener("click", async () => {
-  const id = $("#run-model").value;
+$("#run-start").addEventListener("click", (event) => whileBusy(event.currentTarget, async () => {
+  const id = selectedModelId();
   if (!id) return;
   const status = await withErrors(() => api("/engine/start", {
     method: "POST", body: { model_id: Number(id), ...planBody() },
   }));
-  if (status) { toast("Loading model… this can take a minute for big models."); pollEngine(); }
-});
+  if (status) { toast("Loading model… this can take a minute for big models.", "info"); pollEngine(); }
+}));
 
-$("#run-stop").addEventListener("click", async () => {
+$("#run-stop").addEventListener("click", (event) => whileBusy(event.currentTarget, async () => {
   await withErrors(() => api("/engine/stop", { method: "POST" }));
   pollEngine();
-});
+}));
 
-$("#run-bench").addEventListener("click", async () => {
+$("#run-bench").addEventListener("click", (event) => whileBusy(event.currentTarget, async () => {
   $("#run-bench-view").textContent = "Running…";
   const result = await withErrors(() => api("/engine/benchmark", { method: "POST" }));
   $("#run-bench-view").innerHTML = result
     ? `<strong>${result.generated_tokens_per_second} tokens/s</strong> generating ·
        ${result.prompt_tokens_per_second} tokens/s reading the prompt`
     : "";
-});
+}));
+
+function showAppOffline() {
+  const pill = $("#engine-pill");
+  pill.className = "pill offline";
+  pill.textContent = "app offline";
+  pill.title = OFFLINE_MESSAGE;
+}
 
 async function pollEngine() {
-  const status = await api("/engine").catch(() => null);
   clearTimeout(pollEngine.timer);
   pollEngine.timer = setTimeout(pollEngine, ENGINE_POLL_MS);
-  if (!status) return;
+  const status = await api("/engine").catch(() => null);
+  if (!status) { showAppOffline(); return; }
   const pill = $("#engine-pill");
+  pill.title = "";
   pill.className = `pill ${status.state}`;
   const model = status.model_path ? status.model_path.split("/").pop() : "";
   pill.textContent = `engine: ${status.state}${model ? ` · ${model}` : ""}`;
-  $("#run-log").textContent = status.log_tail.join("\n");
-  const outOfMemory = status.state === "crashed" && status.log_tail.some((l) => /failed to allocate/i.test(l));
+  const logTail = status.log_tail ?? [];
+  $("#run-log").textContent = logTail.join("\n");
+  const outOfMemory = status.state === "crashed" && logTail.some((l) => /failed to allocate/i.test(l));
   if (outOfMemory && !pollEngine.warned) {
     pollEngine.warned = true;
     toast("Ran out of GPU memory. Try a smaller context, a q8_0 KV cache, or more experts on CPU.");
@@ -398,6 +449,13 @@ function inlineThinkSplitter(view) {
   };
 }
 
+// One "data: {...}" line of the server-sent stream, or null for anything else.
+// A garbled line is skipped rather than ending the whole reply.
+function parseStreamLine(line) {
+  if (!line.startsWith("data: ") || line.includes("[DONE]")) return null;
+  try { return JSON.parse(line.slice(6)); } catch { return null; }
+}
+
 let chatAbort = null;
 
 function setChatBusy(busy) {
@@ -424,10 +482,7 @@ async function sendChat(text) {
       body: JSON.stringify(body),
       signal: chatAbort.signal,
     });
-    if (!response.ok) {
-      const detail = await response.json().catch(() => ({}));
-      throw new Error(detail.detail || response.statusText);
-    }
+    if (!response.ok) throw await errorFromResponse(response);
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -438,8 +493,10 @@ async function sendChat(text) {
       const lines = buffer.split("\n");
       buffer = lines.pop();
       for (const line of lines) {
-        if (!line.startsWith("data: ") || line.includes("[DONE]")) continue;
-        const delta = JSON.parse(line.slice(6)).choices?.[0]?.delta ?? {};
+        const event = parseStreamLine(line);
+        if (!event) continue;
+        if (event.error) throw new Error(event.error.message || "The engine reported an error.");
+        const delta = event.choices?.[0]?.delta ?? {};
         if (delta.reasoning_content) view.addThought(delta.reasoning_content);
         if (delta.content) addContent(delta.content);
       }

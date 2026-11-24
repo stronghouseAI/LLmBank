@@ -3,6 +3,7 @@
 "use strict";
 
 const QUEST_POLL_MS = 1200;
+const QUEST_RETRY_MS = 3000;
 const ACTIVE_QUEST_STATES = ["running", "waiting_approval"];
 const SKILL_CATEGORY_NAMES = {
   files: "📁 Files", web: "🌐 Web", documents: "📄 Documents", desktop: "🖥️ Desktop", utility: "🧮 Utility",
@@ -150,8 +151,10 @@ $("#agent-form").addEventListener("submit", async (event) => {
 });
 
 $("#agent-list").addEventListener("click", async (event) => {
-  const { edit, journal, delete: dismiss } = event.target.dataset;
-  const exportId = event.target.dataset.export;
+  const button = event.target.closest("button");
+  if (!button) return;
+  const { edit, journal, delete: dismiss } = button.dataset;
+  const exportId = button.dataset.export;
   if (edit) openSheet(guild.agents.find((a) => a.id === Number(edit)));
   if (journal) openJournal(Number(journal));
   if (exportId) {
@@ -201,7 +204,7 @@ async function renderJournal(agentId) {
 }
 
 $("#journal-list").addEventListener("click", async (event) => {
-  const { agent, note } = event.target.dataset;
+  const { agent, note } = event.target.closest("button")?.dataset ?? {};
   if (!note) return;
   await withErrors(() => api(`/agents/${agent}/journal/${note}`, { method: "DELETE" }));
   renderJournal(Number(agent));
@@ -210,7 +213,7 @@ $("#journal-close").addEventListener("click", () => $("#journal-dialog").close()
 
 // ---------- quests ----------
 
-$("#quest-start").addEventListener("click", async () => {
+$("#quest-start").addEventListener("click", (event) => whileBusy(event.currentTarget, async () => {
   const task = $("#quest-task").value.trim();
   const worker = Number($("#quest-worker").value);
   const reviewer = Number($("#quest-reviewer").value);
@@ -220,8 +223,9 @@ $("#quest-start").addEventListener("click", async () => {
   const quest = await withErrors(() => api("/quests", { method: "POST", body: { task, agent_ids: agentIds } }));
   if (!quest) return;
   $("#quest-task").value = "";
+  updateQuestHint();
   showQuest(quest.id);
-});
+}));
 
 async function loadQuests() {
   const quests = (await withErrors(() => api("/quests"))) || [];
@@ -246,8 +250,14 @@ function showQuest(questId) {
 async function pollQuest() {
   clearTimeout(pollQuest.timer);
   if (!guild.questId) return;
-  const quest = await api(`/quests/${guild.questId}`).catch(() => null);
-  if (!quest) return;
+  const questId = guild.questId;
+  const quest = await api(`/quests/${questId}`).catch(() => null);
+  if (questId !== guild.questId) return;  // another quest was opened meanwhile
+  if (!quest) {
+    // Keep trying: giving up here could leave an approval request unseen.
+    pollQuest.timer = setTimeout(pollQuest, QUEST_RETRY_MS);
+    return;
+  }
   renderQuest(quest);
   if (ACTIVE_QUEST_STATES.includes(quest.state)) {
     pollQuest.timer = setTimeout(pollQuest, QUEST_POLL_MS);
@@ -290,13 +300,20 @@ function describeAction({ skill, arguments: args }) {
 }
 
 $("#quest-approval").addEventListener("click", async (event) => {
-  const choice = event.target.dataset.decide;
+  const choice = event.target.closest("[data-decide]")?.dataset.decide;
   if (!choice) return;
-  await withErrors(() => api(`/quests/${guild.questId}/decision`, { method: "POST", body: { approve: choice === "yes" } }));
+  const buttons = $("#quest-approval").querySelectorAll("button");
+  if ([...buttons].some((b) => b.disabled)) return;  // one decision per request
+  buttons.forEach((b) => { b.disabled = true; });
+  const sent = await withErrors(() => api(`/quests/${guild.questId}/decision`, {
+    method: "POST", body: { approve: choice === "yes" },
+  }));
+  // On failure let the person try again; on success the next render replaces the box.
+  if (!sent) buttons.forEach((b) => { b.disabled = false; });
   pollQuest();
 });
 
-$("#quest-cancel").addEventListener("click", async () => {
+$("#quest-cancel").addEventListener("click", (event) => whileBusy(event.currentTarget, async () => {
   await withErrors(() => api(`/quests/${guild.questId}/cancel`, { method: "POST" }));
   pollQuest();
-});
+}));
