@@ -1,7 +1,9 @@
 """HTTP API wiring, with real storage and fake hardware, hub and engine."""
 
+import json
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -165,3 +167,63 @@ def test_hub_files_are_marked_with_whether_they_fit(client):
     ]
     bad = test_client.get("/api/hub/search", params={"size": "enormous"})
     assert bad.status_code == 422
+
+
+def test_invalid_input_is_one_readable_sentence(client):
+    test_client, _ = client
+    entry_id = test_client.get("/api/library").json()[0]["id"]
+    response = test_client.post(f"/api/library/{entry_id}/plan", json={"context": 0})
+    assert response.status_code == 422
+    assert response.json()["detail"] == "context: Input should be greater than 0"
+
+
+def test_unexpected_crash_is_json_without_the_exception_text(tmp_path: Path):
+    settings = load_settings({"STRONGHOUSE_DATA_DIR": str(tmp_path)})
+    services = build_services(settings)
+
+    def broken_probe():
+        raise RuntimeError("secret /home/me/token path")
+
+    services.probe_hardware = broken_probe
+    with TestClient(create_app(services), raise_server_exceptions=False) as test_client:
+        response = test_client.get("/api/hardware")
+    assert response.status_code == 500
+    detail = response.json()["detail"]
+    assert "RuntimeError" in detail and "secret" not in detail
+
+
+class StreamingEngine(FakeEngine):
+    def __init__(self, chunks, fail_after=False):
+        super().__init__()
+        self.chunks, self.fail_after, self.payload = chunks, fail_after, None
+
+    def stream_chat(self, payload):
+        self.payload = payload
+        yield from self.chunks
+        if self.fail_after:
+            raise httpx.ReadError("connection reset")
+
+
+def test_chat_passes_extra_fields_through(client):
+    test_client, services = client
+    services.engine = StreamingEngine([b'data: {"choices":[]}\n\n'])
+    body = {"messages": [{"role": "user", "content": "hi"}], "temperature": 0.2}
+    response = test_client.post("/api/chat", json=body)
+    assert response.status_code == 200
+    assert services.engine.payload["temperature"] == 0.2
+
+
+def test_chat_without_messages_is_rejected(client):
+    test_client, _ = client
+    assert test_client.post("/api/chat", json={"messages": []}).status_code == 422
+    assert test_client.post("/api/chat", content=b"not json").status_code == 422
+
+
+def test_chat_that_breaks_mid_reply_ends_with_an_error_event(client):
+    test_client, services = client
+    services.engine = StreamingEngine([b'data: {"choices":[]}\n\n'], fail_after=True)
+    response = test_client.post("/api/chat", json={"messages": [{"role": "user", "content": "x"}]})
+    last_event = response.text.strip().split("\n\n")[-1]
+    assert json.loads(last_event.removeprefix("data: "))["error"]["message"].startswith(
+        "The engine stopped mid-reply"
+    )
