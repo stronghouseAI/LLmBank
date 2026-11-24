@@ -245,3 +245,64 @@ def test_chat_that_breaks_mid_reply_ends_with_an_error_event(client):
     assert json.loads(last_event.removeprefix("data: "))["error"]["message"].startswith(
         "The engine stopped mid-reply"
     )
+
+
+def test_chat_is_offline_unless_internet_is_turned_on(client):
+    test_client, services = client
+    services.engine = StreamingEngine([b'data: {"choices":[]}\n\n'])
+    body = {"messages": [{"role": "user", "content": "hi"}]}
+    test_client.post("/api/chat", json=body)
+    assert "tools" not in services.engine.payload
+    assert "web" not in services.engine.payload
+
+    test_client.post("/api/chat", json={**body, "web": True})
+    names = {tool["function"]["name"] for tool in services.engine.payload["tools"]}
+    assert names == {"web_search", "fetch_web_page", "read_news_feed"}
+    assert "web" not in services.engine.payload
+    assert services.engine.payload["messages"][0]["role"] == "system"
+
+
+class FakeSkills:
+    def __init__(self, error=None):
+        self.calls = []
+        self.error = error
+
+    def execute(self, agent_id, skill, arguments):
+        self.calls.append((skill, arguments))
+        if self.error:
+            raise self.error
+        return "1. Result - https://example.org"
+
+
+def test_chat_web_action_runs_an_approved_search(client):
+    test_client, services = client
+    services.skills = FakeSkills()
+    body = {"name": "web_search", "arguments": {"query": "llama.cpp release"}}
+    response = test_client.post("/api/chat/web", json=body)
+    assert response.json() == {"result": "1. Result - https://example.org", "ok": True}
+    assert services.skills.calls == [("web_search", {"query": "llama.cpp release"})]
+
+
+def test_chat_web_action_refuses_anything_but_web_tools(client):
+    test_client, services = client
+    services.skills = FakeSkills()
+    for name in ("run_command", "write_file", "read_file"):
+        response = test_client.post("/api/chat/web", json={"name": name, "arguments": {}})
+        assert response.status_code == 400
+    assert services.skills.calls == []
+
+
+def test_chat_web_action_failure_goes_back_to_the_model_as_text(client):
+    from stronghouse.services.skills import SkillError
+
+    test_client, services = client
+    services.skills = FakeSkills(SkillError("example.org refused the request (403)."))
+    response = test_client.post(
+        "/api/chat/web",
+        json={"name": "fetch_web_page", "arguments": {"url": "https://example.org"}},
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "result": "Error: example.org refused the request (403).",
+        "ok": False,
+    }

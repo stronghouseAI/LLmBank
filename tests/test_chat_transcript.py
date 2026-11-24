@@ -30,9 +30,9 @@ def test_thinking_is_marked_and_can_be_left_out():
 
 
 def test_empty_reply_and_unknown_role_are_named():
-    text = transcript_text([ChatTurn("assistant", "  "), ChatTurn("tool", "x")], None, WHEN)
+    text = transcript_text([ChatTurn("assistant", "  "), ChatTurn("function", "x")], None, WHEN)
     assert "Model:\n(empty)" in text
-    assert "Tool:\nx" in text
+    assert "Function:\nx" in text
 
 
 def test_filename_is_safe_and_dated():

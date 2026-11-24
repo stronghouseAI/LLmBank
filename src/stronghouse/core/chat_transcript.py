@@ -9,7 +9,8 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 
-ROLE_NAMES = {"user": "You", "assistant": "Model", "system": "System"}
+# "tool" turns are the Chat page's internet steps: what was asked and what came back.
+ROLE_NAMES = {"user": "You", "assistant": "Model", "system": "System", "tool": "Internet"}
 RULE = "-" * 60
 
 

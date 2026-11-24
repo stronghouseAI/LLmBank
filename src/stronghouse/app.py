@@ -51,6 +51,8 @@ class Services:
     settings: Settings
     agents: AgentStore
     quests: QuestRunner
+    # Runs skills for agents and the Chat page's internet access; each use is approved first.
+    skills: SkillExecutor
     jobs: JobRunner | None = None
 
     def engine_command_preview(self, model_path: Path, plan: LaunchPlan) -> list[str]:
@@ -103,7 +105,8 @@ def build_services(settings: Settings) -> Services:
     )
     downloads = DownloadManager(hub, indexer, settings.archive_dir, engine.version)
     agents = AgentStore(settings.agents_database_path)
-    quests = QuestRunner(agents, engine, SkillExecutor(agents.add_note))
+    skills = SkillExecutor(agents.add_note)
+    quests = QuestRunner(agents, engine, skills)
     services = Services(
         store=store,
         indexer=indexer,
@@ -114,6 +117,7 @@ def build_services(settings: Settings) -> Services:
         settings=settings,
         agents=agents,
         quests=quests,
+        skills=skills,
     )
     services.jobs = JobRunner(
         JobStore(settings.jobs_database_path),
