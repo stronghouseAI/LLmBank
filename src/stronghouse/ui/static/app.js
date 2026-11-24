@@ -66,19 +66,61 @@ async function whileBusy(button, action) {
   try { return await action(); } finally { button.disabled = false; }
 }
 
+// In-app replacement for prompt() and confirm(). Resolves to the typed text (with
+// `input`), true (confirm), or null when cancelled.
+function ask({ title, message = "", input = null, confirmText = "OK", danger = false }) {
+  const dialog = $("#ask-dialog");
+  const field = $("#ask-input");
+  $("#ask-title").textContent = title;
+  $("#ask-message").textContent = message;
+  $("#ask-ok").textContent = confirmText;
+  $("#ask-ok").className = danger ? "danger" : "";
+  field.hidden = input === null;
+  field.value = input ?? "";
+  dialog.returnValue = "";
+  dialog.showModal();
+  if (input !== null) field.select();
+  return new Promise((resolve) => {
+    dialog.addEventListener("close", () => {
+      if (dialog.returnValue !== "ok") resolve(null);
+      else resolve(input === null ? true : field.value);
+    }, { once: true });
+  });
+}
+$("#ask-input").addEventListener("keydown", (event) => {
+  if (event.key === "Enter") { event.preventDefault(); $("#ask-dialog").close("ok"); }
+});
+
+function emptyState(text) {
+  return `<p class="empty">${escapeHtml(text)}</p>`;
+}
+
+function loadingState(text) {
+  return `<p class="empty"><span class="thinking"><span class="spinner" aria-hidden="true"></span>${escapeHtml(text)}</span></p>`;
+}
+
 // Last line of defence: an unexpected script error becomes a message, not a dead page.
 window.addEventListener("unhandledrejection", (event) => toast(event.reason?.message || String(event.reason)));
 
 // ---------- tabs ----------
 
-document.querySelectorAll(".tabs button").forEach((button) => {
-  button.addEventListener("click", () => {
-    document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("active", b === button));
-    document.querySelectorAll(".panel").forEach((p) => p.classList.toggle("active", p.id === `tab-${button.dataset.tab}`));
-    if (button.dataset.tab === "library") loadLibrary();
-    if (button.dataset.tab === "run") loadRunModels();
-    if (button.dataset.tab === "system") loadSystem();
+const TAB_LOADERS = { library: () => loadLibrary(), run: () => loadRunModels(), system: () => loadSystem() };
+
+function showTab(name) {
+  const button = document.querySelector(`.tabs button[data-tab="${name}"]`);
+  if (!button) return;
+  document.querySelectorAll(".tabs button").forEach((b) => {
+    b.classList.toggle("active", b === button);
+    b.setAttribute("aria-selected", String(b === button));
   });
+  document.querySelectorAll(".panel").forEach((p) => p.classList.toggle("active", p.id === `tab-${name}`));
+  // Remember the page in the address, so a reload stays where you were.
+  if (location.hash !== `#${name}`) history.replaceState(null, "", `#${name}`);
+  TAB_LOADERS[name]?.();
+}
+
+document.querySelectorAll(".tabs button").forEach((button) => {
+  button.addEventListener("click", () => showTab(button.dataset.tab));
 });
 
 // ---------- vault (library) ----------
@@ -89,25 +131,28 @@ async function loadLibrary() {
   if (!entries) return;
   const list = $("#library-list");
   if (entries.length === 0) {
-    list.innerHTML = `<p class="muted">Your vault is empty. Find a model in Discover, or put .gguf files in
-      &lt;archive&gt;/&lt;owner&gt;/&lt;repo&gt;/ and press Rescan.</p>`;
+    list.innerHTML = $("#library-search").value
+      ? emptyState("No models match that search.")
+      : emptyState("Your vault is empty. Archive a model from Discover, or put .gguf files in "
+        + "<archive>/<owner>/<repo>/ and press Rescan.");
     return;
   }
   list.innerHTML = entries.map((entry) => `
     <div class="card">
-      <h4>${escapeHtml(entry.filename)}</h4>
+      <h3>${escapeHtml(entry.filename)}</h3>
       <div class="meta">${escapeHtml(entry.repo_id)} · ${formatBytes(entry.size_bytes)}</div>
-      <div>
+      <div class="badges">
         ${entry.is_moe ? '<span class="badge moe">MoE</span>' : ""}
         ${entry.architecture ? `<span class="badge">${escapeHtml(entry.architecture)}</span>` : ""}
-        ${entry.license ? `<span class="badge">license: ${escapeHtml(entry.license)}</span>` : ""}
-        ${entry.sha256 ? '<span class="badge">verified</span>' : ""}
-        ${entry.tags.map((t) => `<span class="badge">#${escapeHtml(t)}</span>`).join("")}
+        ${entry.license ? `<span class="badge">${escapeHtml(entry.license)}</span>` : ""}
+        ${entry.sha256 ? '<span class="badge ok" title="SHA-256 checked after download">verified</span>' : ""}
+        ${(entry.tags ?? []).map((t) => `<span class="badge">#${escapeHtml(t)}</span>`).join("")}
       </div>
       <div class="row">
-        <button class="secondary" data-run="${entry.id}">Run</button>
-        <button class="secondary" data-tags="${entry.id}" data-current="${escapeHtml(entry.tags.join(", "))}">Tags</button>
-        <button class="danger" data-forget="${entry.id}">Forget</button>
+        <button data-run="${entry.id}">Run</button>
+        <button class="secondary" data-tags="${entry.id}" data-current="${escapeHtml((entry.tags ?? []).join(", "))}">Tags</button>
+        <button class="danger" data-forget="${entry.id}" data-name="${escapeHtml(entry.filename)}"
+          title="Remove from this list. The file stays on disk.">Forget</button>
       </div>
     </div>`).join("");
 }
@@ -116,16 +161,24 @@ $("#library-list").addEventListener("click", async (event) => {
   const target = event.target.closest("button");
   if (!target) return;
   if (target.dataset.run) {
+    showTab("run");
     await loadRunModels(target.dataset.run);
-    document.querySelector('.tabs button[data-tab="run"]').click();
   } else if (target.dataset.tags) {
-    const answer = prompt("Tags, separated by commas", target.dataset.current);
+    const answer = await ask({
+      title: "Tags", message: "Separate tags with commas.", input: target.dataset.current, confirmText: "Save",
+    });
     if (answer === null) return;
     await withErrors(() => api(`/library/${target.dataset.tags}/tags`, {
       method: "PUT", body: { tags: answer.split(",") },
     }));
     loadLibrary();
   } else if (target.dataset.forget) {
+    const sure = await ask({
+      title: `Forget ${target.dataset.name}?`,
+      message: "It is removed from the vault list only. The file stays on disk, and Rescan brings it back.",
+      confirmText: "Forget",
+    });
+    if (!sure) return;
     const removed = await withErrors(() => api(`/library/${target.dataset.forget}`, { method: "DELETE" }));
     if (removed) toast("Removed from the list. The file is still on disk.", "info");
     loadLibrary();
@@ -164,17 +217,18 @@ function hubSearchParams() {
 }
 
 async function searchHub() {
-  $("#hub-results").innerHTML = '<p class="muted">Searching…</p>';
+  $("#hub-results").innerHTML = loadingState("Searching Hugging Face…");
   const models = await withErrors(() => api(`/hub/search?${hubSearchParams()}`));
-  if (!models) { $("#hub-results").innerHTML = ""; return; }
+  if (!models) { $("#hub-results").innerHTML = emptyState("Search failed. Check your connection and try again."); return; }
   $("#hub-results").innerHTML = models.map((model) => `
-    <div class="item selectable" data-repo="${escapeHtml(model.repo_id)}">
-      <span><span class="name">${escapeHtml(model.repo_id)}</span><br>
+    <div class="item selectable${model.repo_id === hubFiles.repo ? " selected" : ""}" data-repo="${escapeHtml(model.repo_id)}">
+      <div><div class="name">${escapeHtml(model.repo_id)}</div>
+        <div class="badges">
         ${model.size_label ? `<span class="badge">${escapeHtml(model.size_label)}</span>` : ""}
         ${model.is_moe ? '<span class="badge moe">MoE</span>' : ""}
-        ${KIND_NAMES[model.kind] ? `<span class="badge">${KIND_NAMES[model.kind]}</span>` : ""}</span>
-      <span class="muted">${(model.downloads ?? 0).toLocaleString()} ↓</span>
-    </div>`).join("") || '<p class="muted">No GGUF models match. Try fewer filters.</p>';
+        ${KIND_NAMES[model.kind] ? `<span class="badge">${KIND_NAMES[model.kind]}</span>` : ""}</div></div>
+      <span class="side" title="Downloads">${(model.downloads ?? 0).toLocaleString()} downloads</span>
+    </div>`).join("") || emptyState("No GGUF models match. Try fewer filters.");
 }
 
 const UNKNOWN_FIT = ["fit unknown", "Could not compare this file with your hardware."];
@@ -189,14 +243,14 @@ function renderHubFiles() {
     const [fitLabel, fitHelp] = FIT_NAMES[file.fit] ?? UNKNOWN_FIT;
     return `
     <div class="item">
-      <span><span class="name">${escapeHtml(file.filename)}</span><br>
-        <span class="badge fit-${escapeHtml(file.fit)}" title="${fitHelp}">${fitLabel}</span></span>
-      <span>${formatBytes(file.size_bytes)}
-        <button data-download="${escapeHtml(file.filename)}" data-repo="${escapeHtml(repo)}">Archive</button></span>
+      <div><div class="name">${escapeHtml(file.filename)}</div>
+        <div class="badges"><span class="badge fit-${escapeHtml(file.fit)}" title="${fitHelp}">${fitLabel}</span></div></div>
+      <span class="side">${formatBytes(file.size_bytes)}
+        <button class="small" data-download="${escapeHtml(file.filename)}" data-repo="${escapeHtml(repo)}">Archive</button></span>
     </div>`;
   }).join("")
     + (hidden ? `<p class="muted">${hidden} file(s) too big for this computer are hidden.</p>` : "")
-    || '<p class="muted">No .gguf files in this repo.</p>';
+    || emptyState("No .gguf files in this repo.");
 }
 
 $("#hub-form").addEventListener("submit", (event) => { event.preventDefault(); searchHub(); });
@@ -208,9 +262,10 @@ $("#hub-results").addEventListener("click", async (event) => {
   const row = event.target.closest("[data-repo]");
   if (!row) return;
   const repo = row.dataset.repo;
-  $("#hub-files").innerHTML = '<p class="muted">Loading files…</p>';
+  $("#hub-results").querySelectorAll(".item").forEach((item) => item.classList.toggle("selected", item === row));
+  $("#hub-files").innerHTML = loadingState("Loading files…");
   const files = await withErrors(() => api(`/hub/files?repo_id=${encodeURIComponent(repo)}`));
-  if (!files) { $("#hub-files").innerHTML = ""; return; }
+  if (!files) { $("#hub-files").innerHTML = emptyState("Could not load the files. Try again."); return; }
   hubFiles = { repo, files };
   renderHubFiles();
 });
@@ -238,12 +293,13 @@ async function pollDownloads() {
   if (!jobs) return;
   $("#download-list").innerHTML = jobs.map((job) => {
     const percent = job.bytes_total ? Math.floor((100 * job.bytes_done) / job.bytes_total) : 0;
-    return `<div class="item"><div style="flex:1">
+    return `<div class="item"><div class="grow-fill">
       <div class="name">${escapeHtml(job.repo_id)} / ${escapeHtml(job.filename)}</div>
-      <div class="muted">${escapeHtml(job.state)} · ${formatBytes(job.bytes_done)} of ${formatBytes(job.bytes_total)}
-        ${job.error ? ` · <span style="color:var(--danger)">${escapeHtml(job.error)}</span>` : ""}</div>
-      <div class="progress"><div style="width:${percent}%"></div></div></div></div>`;
-  }).join("") || '<p class="muted">No downloads yet.</p>';
+      <div class="muted num">${escapeHtml(job.state)} · ${formatBytes(job.bytes_done)} of ${formatBytes(job.bytes_total)}
+        ${job.error ? ` · <span class="error">${escapeHtml(job.error)}</span>` : ""}</div>
+      <div class="progress"><div style="width:${percent}%"></div></div></div>
+      <span class="side">${percent}%</span></div>`;
+  }).join("") || emptyState("No downloads yet.");
   const active = jobs.some((job) => ["queued", "downloading", "verifying"].includes(job.state));
   clearTimeout(pollDownloads.timer);
   if (active) pollDownloads.timer = setTimeout(pollDownloads, DOWNLOAD_POLL_MS);
@@ -256,8 +312,9 @@ async function loadRunModels(selectId) {
   if (!entries) return;
   const select = $("#run-model");
   const keep = selectId ?? select.value;
-  select.innerHTML = entries.map((e) =>
-    `<option value="${e.id}">${escapeHtml(e.filename)}${e.is_moe ? " (MoE)" : ""}</option>`).join("");
+  select.innerHTML = entries.length
+    ? entries.map((e) => `<option value="${e.id}">${escapeHtml(e.filename)}${e.is_moe ? " (MoE)" : ""}</option>`).join("")
+    : '<option value="">No models in your vault yet</option>';
   if (keep) select.value = keep;
   showProfile();
 }
@@ -284,16 +341,18 @@ function planBody() {
   };
 }
 
+const STRATEGY_NAMES = { full_gpu: "Full GPU", moe_split: "MoE split", partial_layers: "Partial layers", cpu_only: "CPU only" };
+
 function renderPlan({ plan, command }) {
   const total = plan.estimated_gpu_bytes + plan.estimated_cpu_bytes || 1;
   const gpuShare = (100 * plan.estimated_gpu_bytes) / total;
   $("#run-plan-view").innerHTML = `
-    <div><strong>${escapeHtml(plan.strategy.replaceAll("_", " "))}</strong> ·
-      context ${plan.context_size.toLocaleString()} · GPU layers ${plan.n_gpu_layers} ·
-      experts on CPU ${plan.n_cpu_moe}</div>
+    <div class="plan-head num"><strong>${escapeHtml(STRATEGY_NAMES[plan.strategy] ?? plan.strategy)}</strong>
+      <span>context ${plan.context_size.toLocaleString()}</span><span>GPU layers ${plan.n_gpu_layers}</span>
+      <span>experts on CPU ${plan.n_cpu_moe}</span></div>
     <div class="meter"><div class="gpu" style="width:${gpuShare}%"></div><div class="cpu" style="flex:1"></div></div>
-    <div class="muted">GPU ≈ ${formatBytes(plan.estimated_gpu_bytes)} · RAM ≈ ${formatBytes(plan.estimated_cpu_bytes)} (estimates)</div>
-    <ul>${plan.notes.map((n) => `<li>${escapeHtml(n)}</li>`).join("")}</ul>
+    <div class="muted num">GPU ≈ ${formatBytes(plan.estimated_gpu_bytes)} · RAM ≈ ${formatBytes(plan.estimated_cpu_bytes)} (estimates)</div>
+    ${plan.notes.length ? `<ul class="plan-notes">${plan.notes.map((n) => `<li>${escapeHtml(n)}</li>`).join("")}</ul>` : ""}
     <details><summary>Command</summary><code>${escapeHtml(command.join(" "))}</code></details>`;
 }
 
@@ -325,31 +384,29 @@ $("#run-stop").addEventListener("click", (event) => whileBusy(event.currentTarge
 }));
 
 $("#run-bench").addEventListener("click", (event) => whileBusy(event.currentTarget, async () => {
-  $("#run-bench-view").textContent = "Running…";
+  $("#run-bench-view").innerHTML = '<div class="bench thinking"><span class="spinner" aria-hidden="true"></span>Running…</div>';
   const result = await withErrors(() => api("/engine/benchmark", { method: "POST" }));
   $("#run-bench-view").innerHTML = result
-    ? `<strong>${result.generated_tokens_per_second} tokens/s</strong> generating ·
-       ${result.prompt_tokens_per_second} tokens/s reading the prompt`
+    ? `<div class="bench"><strong>${result.generated_tokens_per_second}</strong> tokens/s generating ·
+       ${result.prompt_tokens_per_second} tokens/s reading the prompt</div>`
     : "";
 }));
 
-function showAppOffline() {
+function showEngineState(state, model = "", title = "") {
   const pill = $("#engine-pill");
-  pill.className = "pill offline";
-  pill.textContent = "app offline";
-  pill.title = OFFLINE_MESSAGE;
+  pill.className = `pill ${state}`;
+  pill.title = title;
+  pill.querySelector(".state").textContent = state === "offline" ? "App offline" : state;
+  $("#engine-model").textContent = model;
 }
 
 async function pollEngine() {
   clearTimeout(pollEngine.timer);
   pollEngine.timer = setTimeout(pollEngine, ENGINE_POLL_MS);
   const status = await api("/engine").catch(() => null);
-  if (!status) { showAppOffline(); return; }
-  const pill = $("#engine-pill");
-  pill.title = "";
-  pill.className = `pill ${status.state}`;
+  if (!status) { showEngineState("offline", "", OFFLINE_MESSAGE); return; }
   const model = status.model_path ? status.model_path.split("/").pop() : "";
-  pill.textContent = `engine: ${status.state}${model ? ` · ${model}` : ""}`;
+  showEngineState(status.state, model);
   const logTail = status.log_tail ?? [];
   $("#run-log").textContent = logTail.join("\n");
   const outOfMemory = status.state === "crashed" && logTail.some((l) => /failed to allocate/i.test(l));
@@ -418,6 +475,12 @@ function replyView(bubble) {
     addAnswer(text) { finishThinking(); answer.textContent += text; },
     answer: () => answer.textContent,
     end(note) { finishThinking(); clearInterval(timer); if (note) answer.textContent += note; },
+    fail(message) {
+      finishThinking();
+      clearInterval(timer);
+      answer.classList.add("error");
+      answer.textContent += `${answer.textContent ? "\n\n" : ""}${message}`;
+    },
   };
 }
 
@@ -505,7 +568,8 @@ async function sendChat(text) {
     chatHistory.push({ role: "assistant", content: view.answer() });
   } catch (error) {
     const stopped = error.name === "AbortError";
-    view.end(stopped ? (view.answer() ? "\n\n(Stopped.)" : "(Stopped.)") : `Error: ${error.message}`);
+    if (!stopped) view.fail(error.message);
+    else view.end(view.answer() ? "\n\n(Stopped.)" : "(Stopped.)");
     if (stopped && view.answer() !== "(Stopped.)") chatHistory.push({ role: "assistant", content: view.answer() });
     else chatHistory.pop();
   } finally {
@@ -530,17 +594,38 @@ $("#chat-clear").addEventListener("click", () => { chatHistory.length = 0; $("#c
 
 // ---------- system ----------
 
+function statCard(label, value, detail, usedShare = null) {
+  const meter = usedShare === null ? ""
+    : `<div class="meter"><div class="gpu" style="width:${Math.round(usedShare * 100)}%"></div></div>`;
+  return `<div class="stat"><div class="label">${escapeHtml(label)}</div>
+    <div class="value">${escapeHtml(value)}</div>${meter}<div class="detail">${escapeHtml(detail)}</div></div>`;
+}
+
+const usedShare = (free, total) => (total > 0 ? Math.min(1, Math.max(0, 1 - free / total)) : null);
+
 async function loadSystem() {
+  $("#system-view").innerHTML = loadingState("Checking this computer…");
   const [hw, engine] = await Promise.all([withErrors(() => api("/hardware")), api("/engine").catch(() => null)]);
-  if (!hw) return;
-  $("#system-view").innerHTML = `
-    <h3>GPU</h3><div>${hw.gpu_name ? `${escapeHtml(hw.gpu_name)} · ${formatBytes(hw.gpu_free_bytes)} free of ${formatBytes(hw.gpu_total_bytes)}` : "No NVIDIA GPU detected"}</div>
-    <h3>Memory</h3><div>${formatBytes(hw.ram_available_bytes)} free of ${formatBytes(hw.ram_total_bytes)}</div>
-    <h3>CPU</h3><div>${hw.cpu_threads} threads</div>
-    <h3>Engine</h3><div>${engine && engine.version ? escapeHtml(engine.version) : "llama-server not found. Install llama.cpp (see README)."}</div>`;
+  if (!hw) { $("#system-view").innerHTML = emptyState("Could not read the hardware."); return; }
+  $("#system-view").innerHTML = [
+    hw.gpu_name
+      ? statCard("GPU memory", `${formatBytes(hw.gpu_free_bytes)} free`,
+        `${hw.gpu_name} · ${formatBytes(hw.gpu_total_bytes)} total`, usedShare(hw.gpu_free_bytes, hw.gpu_total_bytes))
+      : statCard("GPU", "Not detected", "No NVIDIA GPU found (is nvidia-smi working?). Plans use the CPU only."),
+    statCard("System memory", `${formatBytes(hw.ram_available_bytes)} free`,
+      `${formatBytes(hw.ram_total_bytes)} total`, usedShare(hw.ram_available_bytes, hw.ram_total_bytes)),
+    statCard("CPU", `${hw.cpu_threads} threads`, "Used for experts and layers kept in RAM"),
+    statCard("Engine", engine?.version ? "llama-server found" : "Not found",
+      engine?.version || "Install llama.cpp (see README), or set STRONGHOUSE_LLAMA_SERVER."),
+  ].join("");
 }
 
 // ---------- start ----------
+const startTab = location.hash.slice(1);
+if (startTab && startTab !== "library" && document.querySelector(`.tabs button[data-tab="${startTab}"]`)) {
+  // guild.js adds its own tab loader, so wait until it has run.
+  window.addEventListener("DOMContentLoaded", () => showTab(startTab));
+}
 loadLibrary();
 pollEngine();
 pollDownloads();

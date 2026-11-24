@@ -126,6 +126,8 @@ def test_agent_shop_endpoints(client):
     test_client, _ = client
     catalog = test_client.get("/api/agents/catalog").json()
     assert catalog["recommended_max_skills"] == 5
+    assert catalog["temperature_by_creativity"]["3"] == 0.3
+    assert catalog["max_steps_by_diligence"]["10"] == 22
     assert "starters" not in catalog and "classes" not in catalog
     every_skill = [skill["name"] for skill in catalog["skills"]]
 
@@ -133,6 +135,7 @@ def test_agent_shop_endpoints(client):
         "/api/agents", json={"name": "Newsie", "personality": "Reads news", "skills": every_skill}
     ).json()
     assert created["skills"] == every_skill and created["level"] == 1
+    assert created["tasks_done"] == 0
 
     card = test_client.get(f"/api/agents/{created['id']}/card").json()
     imported = test_client.post("/api/agents/import", json=card).json()
