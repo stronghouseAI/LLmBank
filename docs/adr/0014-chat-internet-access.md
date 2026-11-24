@@ -26,3 +26,11 @@ phil's laptop (ADR 0006), and the app's rule is that every action reaching outsi
 - Needs a model whose chat template supports tools (llama-server already runs with `--jinja`).
   Models without tool support simply answer without searching.
 - The page holds the loop, so the server stays stateless; a reload mid-reply loses that reply.
+
+## Addendum: the terminal (2026-11-24)
+phil asked for the same option in `shai`. `shai chat --web` and `shai ask --web` turn it on
+(off by default), and `/web`, `/web on`, `/web off` switch it inside a chat. The terminal runs
+the same loop as the page: `POST /api/chat` with `web: true`, a `[y/N]` question for every
+search or page (Enter or Ctrl+D means no), then `POST /api/chat/web`, with the same 6-step
+limit. The pieces both front ends share in Python (joining streamed tool calls, the plain
+sentence the user is asked, the "user said no" text) live in `core/chat_web.py`.

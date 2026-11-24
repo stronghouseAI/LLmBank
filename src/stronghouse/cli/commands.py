@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from stronghouse import __version__
@@ -23,6 +24,13 @@ from stronghouse.cli.client import ApiClient, ApiError, connect, stop_background
 from stronghouse.cli.reference import HELP_WORDS, reference_text
 from stronghouse.cli.render import format_bytes, paint
 from stronghouse.config import Settings, load_settings
+from stronghouse.core.chat_web import (
+    MAX_WEB_STEPS,
+    WEB_DENIED,
+    ToolCallCollector,
+    WebCall,
+    describe_web_call,
+)
 from stronghouse.core.log_view import LOG_SOURCES, find_source, report_text, shorten_home
 from stronghouse.services.log_files import read_all_logs, read_log
 
@@ -203,13 +211,28 @@ def get(api: ApiClient, args: argparse.Namespace) -> None:
 # ---------- chat ----------
 
 
+@dataclass
+class ChatOptions:
+    """How replies are asked for and shown in `shai chat` and `shai ask`."""
+
+    think: bool = True
+    show_thinking: bool = False
+    web: bool = False  # offer the internet tools; every use is asked for with y/n
+
+    @classmethod
+    def from_args(cls, args: argparse.Namespace) -> ChatOptions:
+        return cls(not args.no_think, args.show_thinking, args.web)
+
+
 def ask(api: ApiClient, args: argparse.Namespace) -> None:
     messages = [{"role": "user", "content": " ".join(args.prompt)}]
-    _stream_reply(api, messages, think=not args.no_think, show_thinking=args.show_thinking)
+    _answer(api, messages, ChatOptions.from_args(args))
 
 
 def chat(api: ApiClient, args: argparse.Namespace) -> None:
+    options = ChatOptions.from_args(args)
     print(paint("Chat with the loaded model. /clear starts over, /exit or Ctrl+D quits.", "dim"))
+    print(paint(_web_state_text(options.web), "dim"))
     messages: list[dict] = []
     first = " ".join(args.prompt).strip()  # `shai chat how are you` opens with that message
     while True:
@@ -228,26 +251,89 @@ def chat(api: ApiClient, args: argparse.Namespace) -> None:
             messages.clear()
             print(paint("Started a new conversation.", "dim"))
             continue
+        if text.split()[:1] == ["/web"]:
+            options.web = _web_switch(text, options.web)
+            print(paint(_web_state_text(options.web), "dim"))
+            continue
         if not text:
             continue
         messages.append({"role": "user", "content": text})
-        reply = _stream_reply(
-            api, messages, think=not args.no_think, show_thinking=args.show_thinking
-        )
+        reply = _answer(api, messages, options)
         messages.append({"role": "assistant", "content": reply})
 
 
-def _stream_reply(api: ApiClient, messages: list[dict], think: bool, show_thinking: bool) -> str:
-    """Print the reply as it arrives. Thinking shows as a counter, or dim text if asked."""
+def _web_switch(command: str, current: bool) -> bool:
+    """`/web` flips internet access, `/web on` and `/web off` set it."""
+    word = command.split()[1:2]
+    if word in (["on"], ["off"]):
+        return word == ["on"]
+    return not current
+
+
+def _web_state_text(web: bool) -> str:
+    if web:
+        return "Internet is on: you are asked y/n before every search or page. /web off stops it."
+    return "Internet is off. /web turns it on (asks before every search or page)."
+
+
+def _answer(api: ApiClient, messages: list[dict], options: ChatOptions) -> str:
+    """One reply, going online only with the person's y/n for each search or page.
+
+    The model's web calls and their results are added to `messages`, so a chat keeps
+    what was found. After MAX_WEB_STEPS the tools are taken away and it must answer.
+    """
+    for step in range(MAX_WEB_STEPS + 1):
+        offer_web = options.web and step < MAX_WEB_STEPS
+        answer, calls = _stream_reply(api, messages, options, offer_web)
+        if not offer_web or not calls:
+            return answer
+        parts = [call.as_message_part() for call in calls]
+        messages.append({"role": "assistant", "content": answer, "tool_calls": parts})
+        for call in calls:
+            result = _run_web_call(api, call)
+            messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
+    return answer
+
+
+def _run_web_call(api: ApiClient, call: WebCall) -> str:
+    """Ask y/n for one web call; run it if allowed. Returns what the model hears back."""
+    arguments = call.parsed_arguments()
+    print(paint("\nThe model wants to use the internet:", "yellow", "bold"))
+    print("  " + describe_web_call(call.name, arguments))
+    try:
+        answer = prompt_user(paint("Allow once? [y/N] ", "yellow")).strip().lower()
+    except EOFError:
+        answer = ""
+    if answer not in ("y", "yes"):
+        print(paint("Denied. The model answers without it.", "red"))
+        return WEB_DENIED
+    print(paint("Going online…", "dim"))
+    outcome = api.post("/chat/web", {"name": call.name, "arguments": arguments})
+    found = outcome["result"]
+    summary = f"Found {len(found):,} characters." if outcome["ok"] else f"It did not work: {found}"
+    print(paint(summary, "green" if outcome["ok"] else "red"))
+    return found
+
+
+def _stream_reply(
+    api: ApiClient, messages: list[dict], options: ChatOptions, offer_web: bool
+) -> tuple[str, list[WebCall]]:
+    """Print the reply as it arrives and return it with any web calls the model asked for.
+
+    Thinking shows as a counter, or dim text if asked.
+    """
     body: dict = {"messages": messages}
-    if not think:
+    if not options.think:
         body["chat_template_kwargs"] = {"enable_thinking": False}
+    if offer_web:
+        body["web"] = True
     started, thought_words, answer = time.monotonic(), 0, ""
+    tool_calls = ToolCallCollector()
     try:
         for delta in api.stream_chat(body):
             if delta.get("reasoning_content"):
                 thought_words += len(delta["reasoning_content"].split())
-                if show_thinking:
+                if options.show_thinking:
                     print(paint(delta["reasoning_content"], "dim"), end="", flush=True)
                 else:
                     seconds = int(time.monotonic() - started)
@@ -262,10 +348,12 @@ def _stream_reply(api: ApiClient, messages: list[dict], think: bool, show_thinki
                     print(f"\r{paint(f'thought for {seconds}s ({thought_words} words)', 'dim')}\n")
                 answer += delta["content"]
                 print(delta["content"], end="", flush=True)
+            tool_calls.add(delta.get("tool_calls") or [])
     except KeyboardInterrupt:
         print(paint("\n(stopped)", "dim"))
+        return answer, []
     print()
-    return answer
+    return answer, tool_calls.calls()
 
 
 # ---------- guild ----------
@@ -630,6 +718,11 @@ def _add_chat(commands: argparse._SubParsersAction) -> None:
             "--no-think", action="store_true", help="answer directly, skip thinking (Qwen3)"
         )
         sub.add_argument("--show-thinking", action="store_true", help="print the model's thinking")
+        sub.add_argument(
+            "--web",
+            action="store_true",
+            help="let the model use the internet; asks y/n before every search or page",
+        )
         sub.set_defaults(handler=handler)
 
     commands.add_parser("bench", help="speed test the loaded model").set_defaults(handler=bench)

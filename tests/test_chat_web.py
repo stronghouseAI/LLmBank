@@ -45,3 +45,25 @@ def test_transcript_names_internet_steps():
     turns = [ChatTurn("user", "q"), ChatTurn("tool", 'Search the web for "q"\n\nresults')]
     text = transcript_text(turns, None, datetime(2026, 11, 24, 12, 0))
     assert "Internet:\nSearch the web" in text
+
+
+def test_tool_call_pieces_join_into_whole_calls():
+    from stronghouse.core.chat_web import ToolCallCollector
+
+    collector = ToolCallCollector()
+    collector.add([{"index": 0, "function": {"name": "web_", "arguments": '{"qu'}}])
+    collector.add([{"index": 0, "function": {"name": "search", "arguments": 'ery": "x"}'}}])
+    collector.add([{"index": 1, "id": "b", "function": {"name": "fetch_web_page"}}])
+    first, second = collector.calls()
+    assert (first.id, first.name) == ("call_0", "web_search")
+    assert first.parsed_arguments() == {"query": "x"}
+    assert (second.id, second.name, second.parsed_arguments()) == ("b", "fetch_web_page", {})
+
+
+def test_web_calls_are_described_in_plain_words():
+    from stronghouse.core.chat_web import describe_web_call
+
+    assert (
+        describe_web_call("fetch_web_page", {"url": "https://a.b"}) == "Open the page https://a.b"
+    )
+    assert describe_web_call("mystery", {}) == "Use mystery"
