@@ -75,6 +75,27 @@ class OffloadStrategy(StrEnum):
     CPU_ONLY = "cpu_only"
 
 
+class MemoryMode(StrEnum):
+    """Where the CPU part of the model is read from while generating."""
+
+    IN_MEMORY = "in_memory"  # fits in free RAM: normal speed for the split
+    STREAM_FROM_DISK = "stream_from_disk"  # bigger than RAM: memory-mapped, read from disk
+
+
+@dataclass(frozen=True)
+class RunTuning:
+    """Optional llama-server speed settings. None means "llama.cpp's own default".
+
+    These mirror the flags people use when running llama-server by hand, so a fast
+    terminal setup can be reproduced in the app. extra_args is passed through last.
+    """
+
+    threads: int | None = None
+    batch_size: int | None = None
+    ubatch_size: int | None = None
+    extra_args: tuple[str, ...] = ()
+
+
 @dataclass(frozen=True)
 class LaunchPlan:
     """Where each part of the model should live, and the settings to run it with."""
@@ -87,6 +108,32 @@ class LaunchPlan:
     estimated_gpu_bytes: int
     estimated_cpu_bytes: int
     notes: list[str] = field(default_factory=list)
+    memory_mode: MemoryMode = MemoryMode.IN_MEMORY
+    tuning: RunTuning = field(default_factory=RunTuning)
+
+
+@dataclass(frozen=True)
+class MemorySpeeds:
+    """Effective read speeds in bytes per second, used only for speed estimates."""
+
+    gpu_bytes_per_second: float
+    ram_bytes_per_second: float
+    disk_bytes_per_second: float
+
+
+@dataclass(frozen=True)
+class SpeedEstimate:
+    """A rough generation-speed forecast for a plan, before loading anything.
+
+    Generating one token reads every active weight once, so speed is bounded by how
+    fast those bytes can be read from VRAM, RAM and (when streaming) the disk.
+    """
+
+    tokens_per_second: float
+    gpu_bytes_per_token: int
+    ram_bytes_per_token: int
+    disk_bytes_per_token: int
+    seconds_per_1000_tokens: float
 
 
 @dataclass(frozen=True)
@@ -104,3 +151,30 @@ class LibraryEntry:
     tags: list[str]
     added_at: str
     id: int | None = None
+
+
+@dataclass(frozen=True)
+class QuantOption:
+    """How the same model would run at another quantization (a different download)."""
+
+    label: str
+    bits_per_weight: float
+    estimated_file_bytes: int
+    memory_mode: MemoryMode
+    tokens_per_second: float
+    is_current: bool
+
+
+@dataclass(frozen=True)
+class PlanSettings:
+    """What the person asked for on the Run page (or shai flags). None means automatic."""
+
+    context: int = 8192
+    kv_cache_type: KvCacheType = KvCacheType.F16
+    n_cpu_moe: int | None = None
+    n_gpu_layers: int | None = None
+    threads: int | None = None
+    batch_size: int | None = None
+    ubatch_size: int | None = None
+    # None uses the app-wide default flags (STRONGHOUSE_EXTRA_ARGS); "" means none.
+    extra_args: str | None = None

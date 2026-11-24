@@ -19,6 +19,7 @@ from stronghouse.core.models import (
     HardwareProfile,
     KvCacheType,
     LaunchPlan,
+    MemoryMode,
     ModelProfile,
     OffloadStrategy,
 )
@@ -187,10 +188,17 @@ def _cpu_only(
 
 
 def _with_ram_check(plan: LaunchPlan, hardware: HardwareProfile) -> LaunchPlan:
+    """Switch to streaming from disk when the CPU part is bigger than free RAM.
+
+    llama.cpp memory-maps the model file, so weights that do not fit in RAM are read
+    back from disk when needed. That is slow but works, which beats not running at
+    all. See docs/adr/0011-big-models-on-small-machines.md.
+    """
     if plan.estimated_cpu_bytes <= hardware.ram_available_bytes:
         return plan
-    warning = (
-        "The CPU part is larger than free system RAM. It will still load (memory-mapped "
-        "from disk) but expect it to be very slow. A smaller quantization would help."
+    note = (
+        "Big model mode: the CPU part is larger than free RAM, so the rest streams "
+        "from disk (memory-mapped). It works, but slowly; an NVMe drive helps a lot. "
+        "Queue a job and walk away, or try a smaller quantization."
     )
-    return replace(plan, notes=[*plan.notes, warning])
+    return replace(plan, memory_mode=MemoryMode.STREAM_FROM_DISK, notes=[*plan.notes, note])

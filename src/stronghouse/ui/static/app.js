@@ -14,30 +14,44 @@ function escapeHtml(value) {
 }
 
 function formatBytes(bytes) {
-  if (!bytes) return "0 B";
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
   const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   return `${(bytes / 1024 ** i).toFixed(i >= 3 ? 1 : 0)} ${units[i]}`;
 }
 
-function toast(message) {
+const OFFLINE_MESSAGE = "Can't reach StronghouseAI. Is the app still running in your terminal?";
+
+// kind: "error" (default, stays longer) or "info".
+function toast(message, kind = "error") {
   const el = $("#toast");
   el.textContent = message;
+  el.className = `toast ${kind}`;
   el.hidden = false;
   clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => { el.hidden = true; }, 5000);
+  toast.timer = setTimeout(() => { el.hidden = true; }, kind === "error" ? 7000 : 4000);
+}
+
+// The server sends {"detail": "<sentence>"}; older or proxy errors may not, so fall back.
+async function errorFromResponse(response) {
+  const body = await response.json().catch(() => ({}));
+  const detail = typeof body.detail === "string" ? body.detail : "";
+  return new Error(detail || `${response.status} ${response.statusText || "error"}`);
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(`/api${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
-  if (!response.ok) {
-    const detail = await response.json().catch(() => ({}));
-    throw new Error(detail.detail || `${response.status} ${response.statusText}`);
+  let response;
+  try {
+    response = await fetch(`/api${path}`, {
+      headers: { "Content-Type": "application/json" },
+      ...options,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    });
+  } catch (error) {
+    if (error.name === "AbortError") throw error;
+    throw new Error(OFFLINE_MESSAGE);
   }
+  if (!response.ok) throw await errorFromResponse(response);
   return response.json();
 }
 
@@ -45,16 +59,68 @@ async function withErrors(action) {
   try { return await action(); } catch (error) { toast(error.message); return undefined; }
 }
 
+// Run an action with its button disabled, so a double click cannot send it twice.
+async function whileBusy(button, action) {
+  if (button.disabled) return undefined;
+  button.disabled = true;
+  try { return await action(); } finally { button.disabled = false; }
+}
+
+// In-app replacement for prompt() and confirm(). Resolves to the typed text (with
+// `input`), true (confirm), or null when cancelled.
+function ask({ title, message = "", input = null, confirmText = "OK", danger = false }) {
+  const dialog = $("#ask-dialog");
+  const field = $("#ask-input");
+  $("#ask-title").textContent = title;
+  $("#ask-message").textContent = message;
+  $("#ask-ok").textContent = confirmText;
+  $("#ask-ok").className = danger ? "danger" : "";
+  field.hidden = input === null;
+  field.value = input ?? "";
+  dialog.returnValue = "";
+  dialog.showModal();
+  if (input !== null) field.select();
+  return new Promise((resolve) => {
+    dialog.addEventListener("close", () => {
+      if (dialog.returnValue !== "ok") resolve(null);
+      else resolve(input === null ? true : field.value);
+    }, { once: true });
+  });
+}
+$("#ask-input").addEventListener("keydown", (event) => {
+  if (event.key === "Enter") { event.preventDefault(); $("#ask-dialog").close("ok"); }
+});
+
+function emptyState(text) {
+  return `<p class="empty">${escapeHtml(text)}</p>`;
+}
+
+function loadingState(text) {
+  return `<p class="empty"><span class="thinking"><span class="spinner" aria-hidden="true"></span>${escapeHtml(text)}</span></p>`;
+}
+
+// Last line of defence: an unexpected script error becomes a message, not a dead page.
+window.addEventListener("unhandledrejection", (event) => toast(event.reason?.message || String(event.reason)));
+
 // ---------- tabs ----------
 
-document.querySelectorAll(".tabs button").forEach((button) => {
-  button.addEventListener("click", () => {
-    document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("active", b === button));
-    document.querySelectorAll(".panel").forEach((p) => p.classList.toggle("active", p.id === `tab-${button.dataset.tab}`));
-    if (button.dataset.tab === "library") loadLibrary();
-    if (button.dataset.tab === "run") loadRunModels();
-    if (button.dataset.tab === "system") loadSystem();
+const TAB_LOADERS = { library: () => loadLibrary(), run: () => loadRunModels(), system: () => loadSystem() };
+
+function showTab(name) {
+  const button = document.querySelector(`.tabs button[data-tab="${name}"]`);
+  if (!button) return;
+  document.querySelectorAll(".tabs button").forEach((b) => {
+    b.classList.toggle("active", b === button);
+    b.setAttribute("aria-selected", String(b === button));
   });
+  document.querySelectorAll(".panel").forEach((p) => p.classList.toggle("active", p.id === `tab-${name}`));
+  // Remember the page in the address, so a reload stays where you were.
+  if (location.hash !== `#${name}`) history.replaceState(null, "", `#${name}`);
+  TAB_LOADERS[name]?.();
+}
+
+document.querySelectorAll(".tabs button").forEach((button) => {
+  button.addEventListener("click", () => showTab(button.dataset.tab));
 });
 
 // ---------- vault (library) ----------
@@ -65,44 +131,56 @@ async function loadLibrary() {
   if (!entries) return;
   const list = $("#library-list");
   if (entries.length === 0) {
-    list.innerHTML = `<p class="muted">Your vault is empty. Find a model in Discover, or put .gguf files in
-      &lt;archive&gt;/&lt;owner&gt;/&lt;repo&gt;/ and press Rescan.</p>`;
+    list.innerHTML = $("#library-search").value
+      ? emptyState("No models match that search.")
+      : emptyState("Your vault is empty. Archive a model from Discover, or put .gguf files in "
+        + "<archive>/<owner>/<repo>/ and press Rescan.");
     return;
   }
   list.innerHTML = entries.map((entry) => `
     <div class="card">
-      <h4>${escapeHtml(entry.filename)}</h4>
+      <h3>${escapeHtml(entry.filename)}</h3>
       <div class="meta">${escapeHtml(entry.repo_id)} · ${formatBytes(entry.size_bytes)}</div>
-      <div>
+      <div class="badges">
         ${entry.is_moe ? '<span class="badge moe">MoE</span>' : ""}
         ${entry.architecture ? `<span class="badge">${escapeHtml(entry.architecture)}</span>` : ""}
-        ${entry.license ? `<span class="badge">license: ${escapeHtml(entry.license)}</span>` : ""}
-        ${entry.sha256 ? '<span class="badge">verified</span>' : ""}
-        ${entry.tags.map((t) => `<span class="badge">#${escapeHtml(t)}</span>`).join("")}
+        ${entry.license ? `<span class="badge">${escapeHtml(entry.license)}</span>` : ""}
+        ${entry.sha256 ? '<span class="badge ok" title="SHA-256 checked after download">verified</span>' : ""}
+        ${(entry.tags ?? []).map((t) => `<span class="badge">#${escapeHtml(t)}</span>`).join("")}
       </div>
       <div class="row">
-        <button class="secondary" data-run="${entry.id}">Run</button>
-        <button class="secondary" data-tags="${entry.id}" data-current="${escapeHtml(entry.tags.join(", "))}">Tags</button>
-        <button class="danger" data-forget="${entry.id}">Forget</button>
+        <button data-run="${entry.id}">Run</button>
+        <button class="secondary" data-tags="${entry.id}" data-current="${escapeHtml((entry.tags ?? []).join(", "))}">Tags</button>
+        <button class="danger" data-forget="${entry.id}" data-name="${escapeHtml(entry.filename)}"
+          title="Remove from this list. The file stays on disk.">Forget</button>
       </div>
     </div>`).join("");
 }
 
 $("#library-list").addEventListener("click", async (event) => {
-  const target = event.target;
+  const target = event.target.closest("button");
+  if (!target) return;
   if (target.dataset.run) {
+    showTab("run");
     await loadRunModels(target.dataset.run);
-    document.querySelector('.tabs button[data-tab="run"]').click();
   } else if (target.dataset.tags) {
-    const answer = prompt("Tags, separated by commas", target.dataset.current);
+    const answer = await ask({
+      title: "Tags", message: "Separate tags with commas.", input: target.dataset.current, confirmText: "Save",
+    });
     if (answer === null) return;
     await withErrors(() => api(`/library/${target.dataset.tags}/tags`, {
       method: "PUT", body: { tags: answer.split(",") },
     }));
     loadLibrary();
   } else if (target.dataset.forget) {
-    await withErrors(() => api(`/library/${target.dataset.forget}`, { method: "DELETE" }));
-    toast("Removed from the list. The file is still on disk.");
+    const sure = await ask({
+      title: `Forget ${target.dataset.name}?`,
+      message: "It is removed from the vault list only. The file stays on disk, and Rescan brings it back.",
+      confirmText: "Forget",
+    });
+    if (!sure) return;
+    const removed = await withErrors(() => api(`/library/${target.dataset.forget}`, { method: "DELETE" }));
+    if (removed) toast("Removed from the list. The file is still on disk.", "info");
     loadLibrary();
   }
 });
@@ -111,11 +189,11 @@ $("#library-search").addEventListener("input", () => {
   clearTimeout(loadLibrary.timer);
   loadLibrary.timer = setTimeout(loadLibrary, 250);
 });
-$("#library-rescan").addEventListener("click", async () => {
+$("#library-rescan").addEventListener("click", (event) => whileBusy(event.currentTarget, async () => {
   const result = await withErrors(() => api("/library/rescan", { method: "POST" }));
-  if (result) toast(`Indexed ${result.indexed} model(s).`);
-  loadLibrary();
-});
+  if (result) toast(`Indexed ${result.indexed} model(s).`, "info");
+  await loadLibrary();
+}));
 
 // ---------- discover (Hugging Face) ----------
 
@@ -139,18 +217,21 @@ function hubSearchParams() {
 }
 
 async function searchHub() {
-  $("#hub-results").innerHTML = '<p class="muted">Searching…</p>';
+  $("#hub-results").innerHTML = loadingState("Searching Hugging Face…");
   const models = await withErrors(() => api(`/hub/search?${hubSearchParams()}`));
-  if (!models) { $("#hub-results").innerHTML = ""; return; }
+  if (!models) { $("#hub-results").innerHTML = emptyState("Search failed. Check your connection and try again."); return; }
   $("#hub-results").innerHTML = models.map((model) => `
-    <div class="item selectable" data-repo="${escapeHtml(model.repo_id)}">
-      <span><span class="name">${escapeHtml(model.repo_id)}</span><br>
+    <div class="item selectable${model.repo_id === hubFiles.repo ? " selected" : ""}" data-repo="${escapeHtml(model.repo_id)}">
+      <div><div class="name">${escapeHtml(model.repo_id)}</div>
+        <div class="badges">
         ${model.size_label ? `<span class="badge">${escapeHtml(model.size_label)}</span>` : ""}
         ${model.is_moe ? '<span class="badge moe">MoE</span>' : ""}
-        ${KIND_NAMES[model.kind] ? `<span class="badge">${KIND_NAMES[model.kind]}</span>` : ""}</span>
-      <span class="muted">${model.downloads.toLocaleString()} ↓</span>
-    </div>`).join("") || '<p class="muted">No GGUF models match. Try fewer filters.</p>';
+        ${KIND_NAMES[model.kind] ? `<span class="badge">${KIND_NAMES[model.kind]}</span>` : ""}</div></div>
+      <span class="side" title="Downloads">${(model.downloads ?? 0).toLocaleString()} downloads</span>
+    </div>`).join("") || emptyState("No GGUF models match. Try fewer filters.");
 }
+
+const UNKNOWN_FIT = ["fit unknown", "Could not compare this file with your hardware."];
 
 function renderHubFiles() {
   const { repo, files } = hubFiles;
@@ -158,15 +239,18 @@ function renderHubFiles() {
   const hideTooBig = $("#hub-fits").checked;
   const visible = files.filter((f) => !(hideTooBig && f.fit === "too_big"));
   const hidden = files.length - visible.length;
-  $("#hub-files").innerHTML = visible.map((file) => `
+  $("#hub-files").innerHTML = visible.map((file) => {
+    const [fitLabel, fitHelp] = FIT_NAMES[file.fit] ?? UNKNOWN_FIT;
+    return `
     <div class="item">
-      <span><span class="name">${escapeHtml(file.filename)}</span><br>
-        <span class="badge fit-${file.fit}" title="${FIT_NAMES[file.fit][1]}">${FIT_NAMES[file.fit][0]}</span></span>
-      <span>${formatBytes(file.size_bytes)}
-        <button data-download="${escapeHtml(file.filename)}" data-repo="${escapeHtml(repo)}">Archive</button></span>
-    </div>`).join("")
+      <div><div class="name">${escapeHtml(file.filename)}</div>
+        <div class="badges"><span class="badge fit-${escapeHtml(file.fit)}" title="${fitHelp}">${fitLabel}</span></div></div>
+      <span class="side">${formatBytes(file.size_bytes)}
+        <button class="small" data-download="${escapeHtml(file.filename)}" data-repo="${escapeHtml(repo)}">Archive</button></span>
+    </div>`;
+  }).join("")
     + (hidden ? `<p class="muted">${hidden} file(s) too big for this computer are hidden.</p>` : "")
-    || '<p class="muted">No .gguf files in this repo.</p>';
+    || emptyState("No .gguf files in this repo.");
 }
 
 $("#hub-form").addEventListener("submit", (event) => { event.preventDefault(); searchHub(); });
@@ -178,9 +262,10 @@ $("#hub-results").addEventListener("click", async (event) => {
   const row = event.target.closest("[data-repo]");
   if (!row) return;
   const repo = row.dataset.repo;
-  $("#hub-files").innerHTML = '<p class="muted">Loading files…</p>';
+  $("#hub-results").querySelectorAll(".item").forEach((item) => item.classList.toggle("selected", item === row));
+  $("#hub-files").innerHTML = loadingState("Loading files…");
   const files = await withErrors(() => api(`/hub/files?repo_id=${encodeURIComponent(repo)}`));
-  if (!files) { $("#hub-files").innerHTML = ""; return; }
+  if (!files) { $("#hub-files").innerHTML = emptyState("Could not load the files. Try again."); return; }
   hubFiles = { repo, files };
   renderHubFiles();
 });
@@ -188,12 +273,18 @@ $("#hub-results").addEventListener("click", async (event) => {
 $("#hub-files").addEventListener("click", async (event) => {
   const button = event.target.closest("[data-download]");
   if (!button) return;
+  if (button.disabled) return;
   button.disabled = true;
   button.textContent = "Archiving…";
-  await withErrors(() => api("/downloads", {
+  const job = await withErrors(() => api("/downloads", {
     method: "POST", body: { repo_id: button.dataset.repo, filename: button.dataset.download },
   }));
-  toast("Download started.");
+  if (!job) {
+    button.disabled = false;
+    button.textContent = "Archive";
+    return;
+  }
+  toast("Download started.", "info");
   pollDownloads();
 });
 
@@ -202,12 +293,13 @@ async function pollDownloads() {
   if (!jobs) return;
   $("#download-list").innerHTML = jobs.map((job) => {
     const percent = job.bytes_total ? Math.floor((100 * job.bytes_done) / job.bytes_total) : 0;
-    return `<div class="item"><div style="flex:1">
+    return `<div class="item"><div class="grow-fill">
       <div class="name">${escapeHtml(job.repo_id)} / ${escapeHtml(job.filename)}</div>
-      <div class="muted">${escapeHtml(job.state)} · ${formatBytes(job.bytes_done)} of ${formatBytes(job.bytes_total)}
-        ${job.error ? ` · <span style="color:var(--danger)">${escapeHtml(job.error)}</span>` : ""}</div>
-      <div class="progress"><div style="width:${percent}%"></div></div></div></div>`;
-  }).join("") || '<p class="muted">No downloads yet.</p>';
+      <div class="muted num">${escapeHtml(job.state)} · ${formatBytes(job.bytes_done)} of ${formatBytes(job.bytes_total)}
+        ${job.error ? ` · <span class="error">${escapeHtml(job.error)}</span>` : ""}</div>
+      <div class="progress"><div style="width:${percent}%"></div></div></div>
+      <span class="side">${percent}%</span></div>`;
+  }).join("") || emptyState("No downloads yet.");
   const active = jobs.some((job) => ["queued", "downloading", "verifying"].includes(job.state));
   clearTimeout(pollDownloads.timer);
   if (active) pollDownloads.timer = setTimeout(pollDownloads, DOWNLOAD_POLL_MS);
@@ -220,8 +312,9 @@ async function loadRunModels(selectId) {
   if (!entries) return;
   const select = $("#run-model");
   const keep = selectId ?? select.value;
-  select.innerHTML = entries.map((e) =>
-    `<option value="${e.id}">${escapeHtml(e.filename)}${e.is_moe ? " (MoE)" : ""}</option>`).join("");
+  select.innerHTML = entries.length
+    ? entries.map((e) => `<option value="${e.id}">${escapeHtml(e.filename)}${e.is_moe ? " (MoE)" : ""}</option>`).join("")
+    : '<option value="">No models in your vault yet</option>';
   if (keep) select.value = keep;
   showProfile();
 }
@@ -232,76 +325,130 @@ async function showProfile() {
   const p = await withErrors(() => api(`/library/${id}/profile`));
   if (!p) return;
   $("#run-profile").innerHTML = `${escapeHtml(p.architecture)} · ${p.block_count} blocks ·
-    trained context ${p.context_length.toLocaleString()}<br>
+    trained context ${(p.context_length ?? 0).toLocaleString()}<br>
     ${p.is_moe ? `MoE: ${p.expert_count} experts, ${p.experts_used} active per token ·
     experts ${formatBytes(p.expert_bytes)}, shared ${formatBytes(p.dense_bytes)}` : `Dense model · ${formatBytes(p.dense_bytes)}`}`;
 }
 $("#run-model").addEventListener("change", showProfile);
 
+// Extra llama-server flags are remembered per browser, so a fast terminal setup
+// only has to be pasted once.
+const EXTRA_FLAGS_KEY = "stronghouse.extraFlags";
+function rememberedExtraFlags() {
+  try { return localStorage.getItem(EXTRA_FLAGS_KEY) ?? ""; } catch { return ""; }
+}
+$("#run-extra").value = rememberedExtraFlags();
+$("#run-extra").addEventListener("change", () => {
+  try { localStorage.setItem(EXTRA_FLAGS_KEY, $("#run-extra").value); } catch { /* private window */ }
+});
+
 function planBody() {
   const optionalInt = (sel) => ($(sel).value === "" ? null : Number($(sel).value));
+  const extra = $("#run-extra").value.trim();
   return {
     context: Number($("#run-context").value),
     kv_cache_type: $("#run-kv").value,
     n_cpu_moe: optionalInt("#run-ncpumoe"),
     n_gpu_layers: optionalInt("#run-ngl"),
+    threads: optionalInt("#run-threads"),
+    batch_size: optionalInt("#run-batch"),
+    ubatch_size: optionalInt("#run-ubatch"),
+    // Empty box: use the app-wide default flags (STRONGHOUSE_EXTRA_ARGS), if any.
+    extra_args: extra === "" ? null : extra,
   };
 }
 
-function renderPlan({ plan, command }) {
+const STRATEGY_NAMES = { full_gpu: "Full GPU", moe_split: "MoE split", partial_layers: "Partial layers", cpu_only: "CPU only" };
+
+// Same rounding as the server's estimates: 125, 4.2 or 0.24 tokens/s.
+const formatRate = (rate) => (rate >= 10 ? rate.toFixed(0) : rate >= 1 ? rate.toFixed(1) : rate.toFixed(2));
+
+function renderForecast(forecast, plan) {
+  if (!forecast) { $("#run-forecast").innerHTML = ""; return; }
+  const streaming = plan.memory_mode === "stream_from_disk";
+  const quants = forecast.quant_options.map((o) => `
+    <span class="badge ${o.memory_mode === "in_memory" ? "fit-gpu" : "fit-offload"} ${o.is_current ? "current" : ""}"
+      title="${o.memory_mode === "in_memory" ? "fits in GPU + RAM" : "streams from disk"} · about ${formatBytes(o.estimated_file_bytes)}">
+      ${escapeHtml(o.label)} · ${formatRate(o.tokens_per_second)} t/s</span>`).join("");
+  $("#run-forecast").innerHTML = `
+    <div class="speed">${streaming ? '<span class="badge fit-offload">Big model mode</span> ' : ""}Expected speed:
+      <strong>${escapeHtml(forecast.wait)}</strong></div>
+    <div class="muted">A rough estimate from memory speeds. The speed test gives the real number.
+      ${streaming ? "Too slow to watch? Queue it on the Jobs page and walk away." : ""}</div>
+    ${forecast.quant_tip ? `<div class="notice warn">${escapeHtml(forecast.quant_tip)}</div>` : ""}
+    ${quants ? `<details><summary>Other quantizations of this model</summary>
+      <div class="quant-grid">${quants}</div>
+      <div class="muted">Green fits in GPU + RAM; amber streams from disk. Download another quantization from Discover.</div></details>` : ""}`;
+}
+
+function renderPlan({ plan, command, forecast }) {
+  renderForecast(forecast, plan);
   const total = plan.estimated_gpu_bytes + plan.estimated_cpu_bytes || 1;
   const gpuShare = (100 * plan.estimated_gpu_bytes) / total;
   $("#run-plan-view").innerHTML = `
-    <div><strong>${escapeHtml(plan.strategy.replace("_", " "))}</strong> ·
-      context ${plan.context_size.toLocaleString()} · GPU layers ${plan.n_gpu_layers} ·
-      experts on CPU ${plan.n_cpu_moe}</div>
+    <div class="plan-head num"><strong>${escapeHtml(STRATEGY_NAMES[plan.strategy] ?? plan.strategy)}</strong>
+      <span>context ${plan.context_size.toLocaleString()}</span><span>GPU layers ${plan.n_gpu_layers}</span>
+      <span>experts on CPU ${plan.n_cpu_moe}</span></div>
     <div class="meter"><div class="gpu" style="width:${gpuShare}%"></div><div class="cpu" style="flex:1"></div></div>
-    <div class="muted">GPU ≈ ${formatBytes(plan.estimated_gpu_bytes)} · RAM ≈ ${formatBytes(plan.estimated_cpu_bytes)} (estimates)</div>
-    <ul>${plan.notes.map((n) => `<li>${escapeHtml(n)}</li>`).join("")}</ul>
+    <div class="muted num">GPU ≈ ${formatBytes(plan.estimated_gpu_bytes)} · RAM ≈ ${formatBytes(plan.estimated_cpu_bytes)} (estimates)</div>
+    ${plan.notes.length ? `<ul class="plan-notes">${plan.notes.map((n) => `<li>${escapeHtml(n)}</li>`).join("")}</ul>` : ""}
     <details><summary>Command</summary><code>${escapeHtml(command.join(" "))}</code></details>`;
 }
 
-$("#run-plan").addEventListener("click", async () => {
+function selectedModelId() {
   const id = $("#run-model").value;
+  if (!id) toast("Pick a model first. Your vault is empty? Archive one from Discover.");
+  return id;
+}
+
+$("#run-plan").addEventListener("click", (event) => whileBusy(event.currentTarget, async () => {
+  const id = selectedModelId();
   if (!id) return;
   const result = await withErrors(() => api(`/library/${id}/plan`, { method: "POST", body: planBody() }));
   if (result) renderPlan(result);
-});
+}));
 
-$("#run-start").addEventListener("click", async () => {
-  const id = $("#run-model").value;
+$("#run-start").addEventListener("click", (event) => whileBusy(event.currentTarget, async () => {
+  const id = selectedModelId();
   if (!id) return;
   const status = await withErrors(() => api("/engine/start", {
     method: "POST", body: { model_id: Number(id), ...planBody() },
   }));
-  if (status) { toast("Loading model… this can take a minute for big models."); pollEngine(); }
-});
+  if (status) { toast("Loading model… this can take a minute for big models.", "info"); pollEngine(); }
+}));
 
-$("#run-stop").addEventListener("click", async () => {
+$("#run-stop").addEventListener("click", (event) => whileBusy(event.currentTarget, async () => {
   await withErrors(() => api("/engine/stop", { method: "POST" }));
   pollEngine();
-});
+}));
 
-$("#run-bench").addEventListener("click", async () => {
-  $("#run-bench-view").textContent = "Running…";
+$("#run-bench").addEventListener("click", (event) => whileBusy(event.currentTarget, async () => {
+  $("#run-bench-view").innerHTML = '<div class="bench thinking"><span class="spinner" aria-hidden="true"></span>Running…</div>';
   const result = await withErrors(() => api("/engine/benchmark", { method: "POST" }));
   $("#run-bench-view").innerHTML = result
-    ? `<strong>${result.generated_tokens_per_second} tokens/s</strong> generating ·
-       ${result.prompt_tokens_per_second} tokens/s reading the prompt`
+    ? `<div class="bench"><strong>${result.generated_tokens_per_second}</strong> tokens/s generating ·
+       ${result.prompt_tokens_per_second} tokens/s reading the prompt</div>`
     : "";
-});
+}));
+
+function showEngineState(state, model = "", title = "") {
+  const pill = $("#engine-pill");
+  pill.className = `pill ${state}`;
+  pill.title = title;
+  pill.querySelector(".state").textContent = state === "offline" ? "App offline" : state;
+  $("#engine-model").textContent = model;
+}
 
 async function pollEngine() {
-  const status = await api("/engine").catch(() => null);
   clearTimeout(pollEngine.timer);
   pollEngine.timer = setTimeout(pollEngine, ENGINE_POLL_MS);
-  if (!status) return;
-  const pill = $("#engine-pill");
-  pill.className = `pill ${status.state}`;
+  const status = await api("/engine").catch(() => null);
+  if (!status) { showEngineState("offline", "", OFFLINE_MESSAGE); return; }
   const model = status.model_path ? status.model_path.split("/").pop() : "";
-  pill.textContent = `engine: ${status.state}${model ? ` · ${model}` : ""}`;
-  $("#run-log").textContent = status.log_tail.join("\n");
-  const outOfMemory = status.state === "crashed" && status.log_tail.some((l) => /failed to allocate/i.test(l));
+  showEngineState(status.state, model);
+  const logTail = status.log_tail ?? [];
+  $("#run-log").textContent = logTail.join("\n");
+  const outOfMemory = status.state === "crashed" && logTail.some((l) => /failed to allocate/i.test(l));
   if (outOfMemory && !pollEngine.warned) {
     pollEngine.warned = true;
     toast("Ran out of GPU memory. Try a smaller context, a q8_0 KV cache, or more experts on CPU.");
@@ -367,6 +514,12 @@ function replyView(bubble) {
     addAnswer(text) { finishThinking(); answer.textContent += text; },
     answer: () => answer.textContent,
     end(note) { finishThinking(); clearInterval(timer); if (note) answer.textContent += note; },
+    fail(message) {
+      finishThinking();
+      clearInterval(timer);
+      answer.classList.add("error");
+      answer.textContent += `${answer.textContent ? "\n\n" : ""}${message}`;
+    },
   };
 }
 
@@ -398,6 +551,13 @@ function inlineThinkSplitter(view) {
   };
 }
 
+// One "data: {...}" line of the server-sent stream, or null for anything else.
+// A garbled line is skipped rather than ending the whole reply.
+function parseStreamLine(line) {
+  if (!line.startsWith("data: ") || line.includes("[DONE]")) return null;
+  try { return JSON.parse(line.slice(6)); } catch { return null; }
+}
+
 let chatAbort = null;
 
 function setChatBusy(busy) {
@@ -424,10 +584,7 @@ async function sendChat(text) {
       body: JSON.stringify(body),
       signal: chatAbort.signal,
     });
-    if (!response.ok) {
-      const detail = await response.json().catch(() => ({}));
-      throw new Error(detail.detail || response.statusText);
-    }
+    if (!response.ok) throw await errorFromResponse(response);
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -438,8 +595,10 @@ async function sendChat(text) {
       const lines = buffer.split("\n");
       buffer = lines.pop();
       for (const line of lines) {
-        if (!line.startsWith("data: ") || line.includes("[DONE]")) continue;
-        const delta = JSON.parse(line.slice(6)).choices?.[0]?.delta ?? {};
+        const event = parseStreamLine(line);
+        if (!event) continue;
+        if (event.error) throw new Error(event.error.message || "The engine reported an error.");
+        const delta = event.choices?.[0]?.delta ?? {};
         if (delta.reasoning_content) view.addThought(delta.reasoning_content);
         if (delta.content) addContent(delta.content);
       }
@@ -448,7 +607,8 @@ async function sendChat(text) {
     chatHistory.push({ role: "assistant", content: view.answer() });
   } catch (error) {
     const stopped = error.name === "AbortError";
-    view.end(stopped ? (view.answer() ? "\n\n(Stopped.)" : "(Stopped.)") : `Error: ${error.message}`);
+    if (!stopped) view.fail(error.message);
+    else view.end(view.answer() ? "\n\n(Stopped.)" : "(Stopped.)");
     if (stopped && view.answer() !== "(Stopped.)") chatHistory.push({ role: "assistant", content: view.answer() });
     else chatHistory.pop();
   } finally {
@@ -473,17 +633,38 @@ $("#chat-clear").addEventListener("click", () => { chatHistory.length = 0; $("#c
 
 // ---------- system ----------
 
+function statCard(label, value, detail, usedShare = null) {
+  const meter = usedShare === null ? ""
+    : `<div class="meter"><div class="gpu" style="width:${Math.round(usedShare * 100)}%"></div></div>`;
+  return `<div class="stat"><div class="label">${escapeHtml(label)}</div>
+    <div class="value">${escapeHtml(value)}</div>${meter}<div class="detail">${escapeHtml(detail)}</div></div>`;
+}
+
+const usedShare = (free, total) => (total > 0 ? Math.min(1, Math.max(0, 1 - free / total)) : null);
+
 async function loadSystem() {
+  $("#system-view").innerHTML = loadingState("Checking this computer…");
   const [hw, engine] = await Promise.all([withErrors(() => api("/hardware")), api("/engine").catch(() => null)]);
-  if (!hw) return;
-  $("#system-view").innerHTML = `
-    <h3>GPU</h3><div>${hw.gpu_name ? `${escapeHtml(hw.gpu_name)} · ${formatBytes(hw.gpu_free_bytes)} free of ${formatBytes(hw.gpu_total_bytes)}` : "No NVIDIA GPU detected"}</div>
-    <h3>Memory</h3><div>${formatBytes(hw.ram_available_bytes)} free of ${formatBytes(hw.ram_total_bytes)}</div>
-    <h3>CPU</h3><div>${hw.cpu_threads} threads</div>
-    <h3>Engine</h3><div>${engine && engine.version ? escapeHtml(engine.version) : "llama-server not found. Install llama.cpp (see README)."}</div>`;
+  if (!hw) { $("#system-view").innerHTML = emptyState("Could not read the hardware."); return; }
+  $("#system-view").innerHTML = [
+    hw.gpu_name
+      ? statCard("GPU memory", `${formatBytes(hw.gpu_free_bytes)} free`,
+        `${hw.gpu_name} · ${formatBytes(hw.gpu_total_bytes)} total`, usedShare(hw.gpu_free_bytes, hw.gpu_total_bytes))
+      : statCard("GPU", "Not detected", "No NVIDIA GPU found (is nvidia-smi working?). Plans use the CPU only."),
+    statCard("System memory", `${formatBytes(hw.ram_available_bytes)} free`,
+      `${formatBytes(hw.ram_total_bytes)} total`, usedShare(hw.ram_available_bytes, hw.ram_total_bytes)),
+    statCard("CPU", `${hw.cpu_threads} threads`, "Used for experts and layers kept in RAM"),
+    statCard("Engine", engine?.version ? "llama-server found" : "Not found",
+      engine?.version || "Install llama.cpp (see README), or set STRONGHOUSE_LLAMA_SERVER."),
+  ].join("");
 }
 
 // ---------- start ----------
+const startTab = location.hash.slice(1);
+if (startTab && startTab !== "library" && document.querySelector(`.tabs button[data-tab="${startTab}"]`)) {
+  // guild.js adds its own tab loader, so wait until it has run.
+  window.addEventListener("DOMContentLoaded", () => showTab(startTab));
+}
 loadLibrary();
 pollEngine();
 pollDownloads();

@@ -28,6 +28,21 @@ SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             ("--kv q8_0", "Half-size KV cache, for longer context (default f16)"),
             ("--n-cpu-moe N", "Put the experts of the first N blocks in RAM (MoE models)"),
             ("--ngl N", "Number of layers on the GPU (--n-gpu-layers)"),
+            ("--threads N", "CPU threads (default: llama.cpp decides)"),
+            ("--batch N / --ubatch N", "llama-server --batch-size / --ubatch-size"),
+            ('--extra="FLAGS"', "Any other llama-server flags, or paste your whole command"),
+        ],
+    ),
+    (
+        "JOBS  big models in the background: queue, walk away, get notified",
+        [
+            ('job add "PROMPT"', "Queue a prompt for the loaded model"),
+            ("  --model MODEL", "Load this model first (with Auto-fit and the load options)"),
+            ("  --file PATH", "Read the prompt from a file"),
+            ("  --no-think / --max-tokens N", "Skip thinking / stop after N tokens"),
+            ("job ls", "All jobs: queued, running, done, failed"),
+            ("job show ID", "The answer so far (also saved as a Markdown file)"),
+            ("job cancel ID / job retry ID", "Stop or remove a job / run it again"),
         ],
     ),
     (
@@ -81,6 +96,8 @@ EXAMPLES = [
     ("shai load qwen3-8b", "load it"),
     ('shai ask "What is 17 times 23?" --no-think', "quick answer"),
     ("shai load deepseek --ctx 16384 --kv q8_0", "bigger model, longer context"),
+    ("shai vault plan glm-4.5-air", "speed estimate and which quantization fits best"),
+    ('shai job add "Write a business plan for ..." --model glm', "queue it and walk away"),
     ('shai quest Newsie "UK headlines into ~/Documents/news.md"', "run an agent"),
 ]
 

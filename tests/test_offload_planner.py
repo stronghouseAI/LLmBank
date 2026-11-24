@@ -3,6 +3,7 @@ import pytest
 from stronghouse.core.models import (
     HardwareProfile,
     KvCacheType,
+    MemoryMode,
     ModelProfile,
     OffloadStrategy,
 )
@@ -114,9 +115,16 @@ def test_no_gpu_runs_on_cpu():
     assert plan.n_gpu_layers == 0
 
 
-def test_warns_when_cpu_part_exceeds_free_ram():
+def test_model_bigger_than_ram_streams_from_disk_instead_of_failing():
     plan = plan_offload(moe_model(), hardware(gpu_gib=8, ram_gib=4), 4096)
-    assert any("larger than free system RAM" in note for note in plan.notes)
+    assert plan.strategy is OffloadStrategy.MOE_SPLIT
+    assert plan.memory_mode is MemoryMode.STREAM_FROM_DISK
+    assert any("Big model mode" in note for note in plan.notes)
+
+
+def test_model_that_fits_in_ram_stays_in_memory():
+    plan = plan_offload(moe_model(), hardware(gpu_gib=8, ram_gib=32), 4096)
+    assert plan.memory_mode is MemoryMode.IN_MEMORY
 
 
 def test_rejects_non_positive_context():

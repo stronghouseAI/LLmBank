@@ -16,18 +16,25 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from stronghouse.api.agent_routes import router as agent_router
+from stronghouse.api.errors import install_error_handlers
+from stronghouse.api.job_routes import router as job_router
 from stronghouse.api.routes import router
 from stronghouse.config import Settings
-from stronghouse.core.launch_args import build_server_args
+from stronghouse.core.jobs import Job
+from stronghouse.core.launch_args import ExtraArgsError, build_server_args
 from stronghouse.core.models import HardwareProfile, LaunchPlan
+from stronghouse.core.run_setup import plan_with_settings
 from stronghouse.services.download_manager import DownloadManager
 from stronghouse.services.engine import EngineController
 from stronghouse.services.hardware_probe import probe_hardware
 from stronghouse.services.huggingface import HuggingFaceClient
+from stronghouse.services.job_runner import JobError, JobRunner
 from stronghouse.services.library_indexer import LibraryIndexer
+from stronghouse.services.notifier import DesktopNotifier
 from stronghouse.services.quest_runner import QuestRunner
 from stronghouse.services.skills import SkillExecutor
 from stronghouse.storage.agent_store import AgentStore
+from stronghouse.storage.job_store import JobStore
 from stronghouse.storage.library_db import LibraryStore
 
 
@@ -42,6 +49,7 @@ class Services:
     settings: Settings
     agents: AgentStore
     quests: QuestRunner
+    jobs: JobRunner | None = None
 
     def engine_command_preview(self, model_path: Path, plan: LaunchPlan) -> list[str]:
         """The exact llama-server command a plan would run, for display and copy-paste."""
@@ -49,6 +57,36 @@ class Services:
         return build_server_args(
             settings.llama_server_path, model_path, plan, settings.host, settings.engine_port
         )
+
+    def load_model_for_job(self, job: Job) -> str:
+        """Make sure the job's model is loaded or loading; return its file name.
+
+        A job with no model uses whatever is loaded. A job for another model replaces
+        the loaded one, planned with Auto-fit and the job's saved settings.
+
+        Raises:
+            JobError: if no model is loaded, or the job's model is gone or unplannable.
+        """
+        status = self.engine.status()
+        if job.model_id is None:
+            if status.model_path is None:
+                raise JobError("No model is loaded. Load one on the Run page or pick one.")
+            return Path(status.model_path).name
+        entry = self.store.get(job.model_id)
+        if entry is None:
+            raise JobError(f"Model {job.model_id} is no longer in the vault.")
+        if status.model_path == entry.path:
+            return entry.filename
+        try:
+            profile = self.indexer.profile(Path(entry.path))
+            self.engine.stop()  # free its GPU memory first, or the plan sees a full GPU
+            plan = plan_with_settings(
+                profile, self.probe_hardware(), job.plan_settings, self.settings.extra_args
+            )
+        except (ValueError, OSError, ExtraArgsError) as error:
+            raise JobError(f"Could not plan {entry.filename}: {error}") from error
+        self.engine.start(Path(entry.path), plan)
+        return entry.filename
 
 
 def build_services(settings: Settings) -> Services:
@@ -64,7 +102,7 @@ def build_services(settings: Settings) -> Services:
     downloads = DownloadManager(hub, indexer, settings.archive_dir, engine.version)
     agents = AgentStore(settings.agents_database_path)
     quests = QuestRunner(agents, engine, SkillExecutor(agents.add_note))
-    return Services(
+    services = Services(
         store=store,
         indexer=indexer,
         hub=hub,
@@ -75,6 +113,14 @@ def build_services(settings: Settings) -> Services:
         agents=agents,
         quests=quests,
     )
+    services.jobs = JobRunner(
+        JobStore(settings.jobs_database_path),
+        engine,
+        load_model=services.load_model_for_job,
+        notify=DesktopNotifier(settings.notify).notify,
+        output_dir=settings.jobs_output_dir,
+    )
+    return services
 
 
 class UiFiles(StaticFiles):
@@ -92,14 +138,20 @@ class UiFiles(StaticFiles):
 def create_app(services: Services) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        if services.jobs is not None:
+            services.jobs.start()
         yield
+        if services.jobs is not None:
+            services.jobs.stop()
         # Never leave a llama-server holding GPU memory after the app quits.
         services.engine.stop()
 
     app = FastAPI(title="StronghouseAI", version="0.1.0", lifespan=lifespan)
     app.state.services = services
+    install_error_handlers(app)
     app.include_router(router)
     app.include_router(agent_router)
+    app.include_router(job_router)
     static_dir = resources.files("stronghouse.ui") / "static"
     app.mount("/", UiFiles(directory=str(static_dir), html=True), name="ui")
     return app
