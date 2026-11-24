@@ -30,6 +30,7 @@ class FakeEngine:
         self.started = None
         self.chat_bodies: list[dict] = []
         self.turns: list[ModelTurn] = []
+        self.replies: list[list[dict]] = []  # scripted deltas; the default answer when empty
 
     def version(self):
         return "test"
@@ -48,8 +49,9 @@ class FakeEngine:
 
     def stream_chat(self, payload):
         self.chat_bodies.append(payload)
-        for delta in ({"reasoning_content": "Seventeen times"}, {"reasoning_content": " 23."},
-                      {"content": "17 × 23 = "}, {"content": "391"}):  # fmt: skip # noqa: RUF001
+        default = ({"reasoning_content": "Seventeen times"}, {"reasoning_content": " 23."},
+                   {"content": "17 × 23 = "}, {"content": "391"})  # fmt: skip # noqa: RUF001
+        for delta in self.replies.pop(0) if self.replies else default:
             yield f"data: {json.dumps({'choices': [{'delta': delta}]})}\n\n".encode()
         yield b"data: [DONE]\n\n"
 
@@ -259,3 +261,83 @@ def test_job_add_ls_show(shai):
     assert code == 0 and "17 × 23 = 391" in out  # noqa: RUF001
     code, out = run("job", "cancel", "1")
     assert code == 1 and "already finished" in out
+
+
+class FakeSkills:
+    def __init__(self):
+        self.calls = []
+
+    def execute(self, agent_id, skill, arguments):
+        self.calls.append((skill, arguments))
+        return "1. llama.cpp b9000 released - https://example.org"
+
+
+def _search_call(query: str) -> list[dict]:
+    """A reply that asks for a web search, split into pieces like a real stream."""
+    arguments = json.dumps({"query": query})
+    return [
+        {"tool_calls": [{"index": 0, "id": "c1", "function": {"name": "web_search"}}]},
+        {"tool_calls": [{"index": 0, "function": {"arguments": arguments[:5]}}]},
+        {"tool_calls": [{"index": 0, "function": {"arguments": arguments[5:]}}]},
+    ]
+
+
+def test_ask_is_offline_without_web(shai):
+    run, services = shai
+    run("load", "qwen3")
+    run("ask", "hi")
+    assert "tools" not in services.engine.chat_bodies[-1]
+
+
+def test_ask_with_web_asks_before_searching_and_answers_with_the_result(shai):
+    run, services = shai
+    run("load", "qwen3")
+    services.skills = FakeSkills()
+    services.engine.replies = [_search_call("llama.cpp release"), [{"content": "It is b9000."}]]
+    code, out = run("ask", "--web", "latest", "llama.cpp?", answers=["y"])
+    assert code == 0
+    assert "Search the web for \u201cllama.cpp release\u201d" in out
+    assert "It is b9000." in out
+    assert services.skills.calls == [("web_search", {"query": "llama.cpp release"})]
+    first, second = services.engine.chat_bodies[-2:]
+    assert len(first["tools"]) == 3
+    assistant, tool = second["messages"][-2:]
+    assert assistant["tool_calls"][0]["function"]["name"] == "web_search"
+    assert tool == {
+        "role": "tool",
+        "tool_call_id": "c1",
+        "content": "1. llama.cpp b9000 released - https://example.org",
+    }
+
+
+def test_saying_no_keeps_the_model_offline(shai):
+    run, services = shai
+    run("load", "qwen3")
+    services.skills = FakeSkills()
+    services.engine.replies = [_search_call("weather"), [{"content": "I could not check."}]]
+    code, out = run("ask", "--web", "weather?", answers=["n"])
+    assert code == 0 and "Denied." in out and "I could not check." in out
+    assert services.skills.calls == []
+    assert "did not allow" in services.engine.chat_bodies[-1]["messages"][-1]["content"]
+
+
+def test_web_stops_being_offered_after_the_step_limit(shai):
+    from stronghouse.core.chat_web import MAX_WEB_STEPS
+
+    run, services = shai
+    run("load", "qwen3")
+    services.skills = FakeSkills()
+    services.engine.replies = [_search_call("again")] * MAX_WEB_STEPS + [[{"content": "Done."}]]
+    code, out = run("ask", "--web", "loop", answers=["y"] * MAX_WEB_STEPS)
+    assert code == 0 and "Done." in out
+    assert len(services.skills.calls) == MAX_WEB_STEPS
+    assert "tools" not in services.engine.chat_bodies[-1]
+
+
+def test_web_command_switches_internet_inside_chat(shai):
+    run, services = shai
+    run("load", "qwen3")
+    code, out = run("chat", answers=["/web", "hi", "/web off", "bye", "/exit"])
+    assert code == 0 and "Internet is on" in out
+    with_web, without = services.engine.chat_bodies[-2:]
+    assert "tools" in with_web and "tools" not in without
