@@ -22,6 +22,9 @@ Inference itself is done by [llama.cpp](https://github.com/ggml-org/llama.cpp)'s
 - **Vault**: browse, search and tag the models on your disk; rescan any archive folder (e.g. an external drive).
 - **Discover**: search GGUF models on Hugging Face and archive them. Filter by model size, type (chat, vision, embedding) and MoE, and sort by downloads, likes, trending or date. Every file is marked *fits in GPU*, *GPU + RAM* or *too big* for your computer. Split models (`-00001-of-0000N`) download all parts.
 - **Run**: Auto-fit plans GPU/CPU placement (`--n-cpu-moe`, `--n-gpu-layers`, context, KV cache type), shows the exact command, loads the model and runs a speed test. Manual overrides are there for fine-tuning.
+- **Big model mode**: models bigger than your RAM still run. The experts that do not fit stream from your disk (an NVMe drive helps), slowly but surely. Auto-fit shows the expected speed before you load (e.g. "about 0.6 tokens/s, so a 1000-token answer takes 28 minutes") and which quantization of the model would fit in RAM instead. See `docs/adr/0011-big-models-on-small-machines.md`.
+- **Speed flags**: set threads, batch and micro-batch, or paste the llama-server command you already use in the terminal; your flags win over the app's.
+- **Jobs**: queue prompts for a big model and walk away. Answers are written to Markdown files in `~/.local/share/stronghouse/jobs/` as they are generated, and a desktop notification tells you when each one is done.
 - **Chat**: talk to the loaded model.
 - **OpenAI-compatible endpoint**: while a model is loaded, `http://127.0.0.1:8766/v1` works with Open WebUI and other tools.
 - **Agents (Agent shop)**: build your own agents from the bottom up. Give each one a name, a job and instructions, any of the 15 skills it needs (files, web and news, PDFs, desktop, calculator and clock), a Temperature and a Max steps limit. Give them tasks using the loaded model. Every action on your computer (reading, writing, searching files, running commands, going online) waits for your **Allow once** or **Deny**. Pair an agent with a reviewer for a team of two. Agents keep notes between tasks and can be exported and imported as `.agent.json` cards. See `docs/adr/0006-skill-library.md` and `0007-agents-built-from-skills.md`; the look is in `0010-studio-ui-and-error-contract.md`. PDF reading needs `poppler` and clipboard copy needs `wl-clipboard` (both one `pacman -S` away).
@@ -44,6 +47,9 @@ shai files Qwen/Qwen3-8B-GGUF          # which files fit your computer
 shai get Qwen/Qwen3-8B-GGUF Qwen3-8B-Q4_K_M.gguf
 shai agents                            # your Guild
 shai quest Newsie "UK headlines into ~/Documents/news.md"   # y/n for every action
+shai vault plan glm-4.5-air            # speed estimate and the best quantization for you
+shai job add "Write a full business plan for ..." --model glm   # queue it, walk away
+shai job ls / shai job show 3          # check on jobs; answers are also saved as files
 shai status                            # engine, model, GPU and memory
 shai unload / shai stop                # free the GPU / stop the background app
 ```
@@ -77,6 +83,10 @@ All settings are environment variables (defined in one place, `src/stronghouse/c
 | `STRONGHOUSE_DATA_DIR` | `~/.local/share/stronghouse` | Library index and engine log. |
 | `STRONGHOUSE_LLAMA_SERVER` | `llama-server` | Path to the llama-server binary. |
 | `STRONGHOUSE_PORT` / `STRONGHOUSE_ENGINE_PORT` | `8765` / `8766` | App and engine ports. |
+| `STRONGHOUSE_EXTRA_ARGS` | unset | llama-server flags added to every launch, e.g. `-b 4096 -ub 1024`. |
+| `STRONGHOUSE_GPU_GBPS` / `_RAM_GBPS` / `_DISK_GBPS` | `180` / `40` / `2` | Memory speeds used for speed estimates. Raise `DISK_GBPS` for a fast NVMe. |
+| `STRONGHOUSE_JOBS_DIR` | `<data dir>/jobs` | Where job answers are saved. |
+| `STRONGHOUSE_NOTIFY` | `1` | Set to `0` to turn off desktop notifications for jobs. |
 | `HF_TOKEN` | unset | Hugging Face token for gated models. Never logged. |
 
 Example: `STRONGHOUSE_ARCHIVE_DIR=/run/media/$USER/models uv run stronghouse`

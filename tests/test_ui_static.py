@@ -8,7 +8,7 @@ from importlib import resources
 from pathlib import Path
 
 STATIC = Path(str(resources.files("stronghouse.ui") / "static"))
-SCRIPTS = ["app.js", "guild.js"]
+SCRIPTS = ["app.js", "guild.js", "jobs.js"]
 # Ids the scripts create themselves inside rendered HTML, not present in index.html.
 CREATED_AT_RUNTIME: set[str] = set()
 

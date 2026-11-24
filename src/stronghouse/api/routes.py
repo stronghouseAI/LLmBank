@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from pathlib import Path
 
 import httpx
@@ -20,8 +20,9 @@ from stronghouse.core.hub_filters import (
     combine_split_parts,
     file_fit,
 )
-from stronghouse.core.models import KvCacheType, LibraryEntry, ModelProfile
-from stronghouse.core.offload_planner import plan_offload
+from stronghouse.core.launch_args import ExtraArgsError
+from stronghouse.core.models import KvCacheType, LibraryEntry, ModelProfile, PlanSettings
+from stronghouse.core.run_setup import forecast, plan_with_settings
 from stronghouse.services.engine import EngineError
 from stronghouse.services.gguf_reader import GgufFormatError
 from stronghouse.storage.archive import UnsafePathError
@@ -39,6 +40,24 @@ class PlanRequest(BaseModel):
     # Manual overrides for people who want to fine-tune after the auto plan.
     n_cpu_moe: int | None = Field(None, ge=0)
     n_gpu_layers: int | None = Field(None, ge=0)
+    # Speed flags, as in a hand-written llama-server command. None = llama.cpp default.
+    threads: int | None = Field(None, ge=1, le=1024)
+    batch_size: int | None = Field(None, ge=1, le=65536)
+    ubatch_size: int | None = Field(None, ge=1, le=65536)
+    # Extra llama-server flags; None uses STRONGHOUSE_EXTRA_ARGS.
+    extra_args: str | None = Field(None, max_length=2000)
+
+    def to_settings(self) -> PlanSettings:
+        return PlanSettings(
+            context=self.context,
+            kv_cache_type=self.kv_cache_type,
+            n_cpu_moe=self.n_cpu_moe,
+            n_gpu_layers=self.n_gpu_layers,
+            threads=self.threads,
+            batch_size=self.batch_size,
+            ubatch_size=self.ubatch_size,
+            extra_args=self.extra_args,
+        )
 
 
 class StartRequest(PlanRequest):
@@ -102,16 +121,19 @@ def get_profile(entry_id: int, request: Request) -> dict:
 def make_plan(entry_id: int, body: PlanRequest, request: Request) -> dict:
     services = request.app.state.services
     entry = _entry(request, entry_id)
-    plan = _plan_for(request, entry_id, body)
+    profile = _load_profile(request, entry_id)
+    hardware = services.probe_hardware()
+    plan = _plan_for(request, profile, body)
     command = services.engine_command_preview(Path(entry.path), plan)
-    return {"plan": asdict(plan), "command": command}
+    outlook = forecast(profile, plan, hardware, entry.filename, services.settings.memory_speeds)
+    return {"plan": asdict(plan), "command": command, "forecast": asdict(outlook)}
 
 
 @router.post("/engine/start")
 def start_engine(body: StartRequest, request: Request) -> dict:
     services = request.app.state.services
     entry = _entry(request, body.model_id)
-    plan = _plan_for(request, body.model_id, body)
+    plan = _plan_for(request, _load_profile(request, body.model_id), body)
     try:
         return asdict(services.engine.start(Path(entry.path), plan))
     except EngineError as error:
@@ -230,18 +252,14 @@ def _load_profile(request: Request, entry_id: int) -> ModelProfile:
         raise HTTPException(422, f"Could not read model file: {error}") from error
 
 
-def _plan_for(request: Request, entry_id: int, body: PlanRequest):
-    profile = _load_profile(request, entry_id)
-    hardware = request.app.state.services.probe_hardware()
-    plan = plan_offload(profile, hardware, body.context, body.kv_cache_type)
-    overrides = {}
-    if body.n_cpu_moe is not None:
-        overrides["n_cpu_moe"] = min(body.n_cpu_moe, profile.block_count)
-    if body.n_gpu_layers is not None:
-        overrides["n_gpu_layers"] = body.n_gpu_layers
-    if overrides:
-        plan = replace(plan, notes=[*plan.notes, "Manual override applied."], **overrides)
-    return plan
+def _plan_for(request: Request, profile: ModelProfile, body: PlanRequest):
+    services = request.app.state.services
+    try:
+        return plan_with_settings(
+            profile, services.probe_hardware(), body.to_settings(), services.settings.extra_args
+        )
+    except ExtraArgsError as error:
+        raise HTTPException(422, str(error)) from error
 
 
 def _profile_summary(profile: ModelProfile) -> dict:
