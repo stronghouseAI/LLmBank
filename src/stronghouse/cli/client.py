@@ -37,6 +37,12 @@ class ApiClient:
     def post(self, path: str, body: dict | None = None) -> object:
         return self._check(self._http.post(f"/api{path}", json=body or {}))
 
+    def put(self, path: str, body: dict) -> object:
+        return self._check(self._http.put(f"/api{path}", json=body))
+
+    def delete(self, path: str) -> object:
+        return self._check(self._http.delete(f"/api{path}"))
+
     def stream_chat(self, body: dict) -> Iterator[dict]:
         """Yield each streamed delta ({"content": ...} or {"reasoning_content": ...})."""
         with self._http.stream("POST", "/api/chat", json=body) as response:

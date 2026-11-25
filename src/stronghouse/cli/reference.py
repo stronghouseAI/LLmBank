@@ -75,11 +75,26 @@ SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
         ],
     ),
     (
-        "GUILD  agents (create them in the web app's Guild tab)",
+        "AGENT VAULT  your agents: build them here or in the web app's Agents tab",
         [
-            ("agents", "List your agents and their skills"),
-            ('quest AGENT "TASK"', "Send an agent on a quest. Asks y/n before every action"),
-            ("  --reviewer AGENT", "A second agent checks the work"),
+            ("agentvault ls", "List your agents and their skills"),
+            ("agents", "Same as agentvault ls"),
+            ("agentvault new [NAME]", "Build an agent from scratch with a few yes/no questions"),
+            ("  --job TEXT", "Job and instructions, in a sentence or two"),
+            ('  --skills "a,b"', "Skill names or numbers; with NAME, skips the questions"),
+            ("  --temperature T", "0.1 (exact) to 1.0 (inventive)"),
+            ("  --max-steps N", "Model replies per task, 4 to 22"),
+            ("agentvault skills", "Every skill an agent can take, numbered"),
+            ("agentvault show AGENT", "Job, skills, settings and recent notes"),
+            ("agentvault edit AGENT", "Change it: walks through every field, or use the flags"),
+            ("agentvault add-skill AGENT SKILL", "Give it more skills (names or numbers)"),
+            ("agentvault remove-skill AGENT SKILL", "Take skills away"),
+            ("agentvault rm AGENT", "Delete an agent and its notes (asks first; --yes skips)"),
+            ("agentvault export AGENT [FILE]", "Save it to a .agent.json file to share or back up"),
+            ("agentvault import FILE", "Add an agent from a .agent.json file (--name renames)"),
+            ('agentvault run AGENT "TASK"', "Give it a task. Asks y/n before every action"),
+            ("  --reviewer AGENT", "A second agent checks the work (a team of two)"),
+            ('quest AGENT "TASK"', "Same as agentvault run"),
         ],
     ),
     (
@@ -107,7 +122,12 @@ EXAMPLES = [
     ("shai load deepseek --ctx 16384 --kv q8_0", "bigger model, longer context"),
     ("shai vault plan glm-4.5-air", "speed estimate and which quantization fits best"),
     ('shai job add "Write a business plan for ..." --model glm', "queue it and walk away"),
-    ('shai quest Newsie "UK headlines into ~/Documents/news.md"', "run an agent"),
+    ("shai agentvault new", "build an agent by answering a few yes/no questions"),
+    (
+        'shai agentvault new Newsie --skills "web_search,read_news_feed,write_file"',
+        "or build it in one line",
+    ),
+    ('shai agentvault run Newsie "UK headlines into ~/Documents/news.md"', "run an agent"),
 ]
 
 
