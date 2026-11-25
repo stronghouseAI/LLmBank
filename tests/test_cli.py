@@ -398,3 +398,34 @@ def test_files_command_switches_file_access_inside_chat(shai):
     with_files, without = services.engine.chat_bodies[-2:]
     assert "list_folder" in str(with_files["tools"])
     assert "tools" not in without and "files" not in without
+
+
+def test_text_tool_calls_work_for_models_without_native_tools(shai, tmp_path, monkeypatch):
+    run, services = shai
+    (tmp_path / "home" / "Downloads").mkdir(parents=True)
+    (tmp_path / "home" / "Downloads" / "notes.txt").write_text("hi")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    run("load", "qwen3")
+    call = '<tool_call>{"name": "list_folder", "arguments": {"path": "~/Downloads"}}</tool_call>'
+    services.engine.replies = [
+        [{"content": "Let me look. "}, {"content": call[:9]}, {"content": call[9:]}],
+        [{"content": "You have notes.txt."}],
+    ]
+    code, out = run("ask", "--files", "what is in Downloads?", answers=["y"])
+    assert code == 0 and "List the folder ~/Downloads" in out and "You have notes.txt." in out
+    assert "<tool_call>" not in out and "Let me look." in out
+    first, second = services.engine.chat_bodies[-2:]
+    assert "<tool_call>" in first["messages"][0]["content"]
+    assistant, result = second["messages"][-2:]
+    assert assistant == {"role": "assistant", "content": "Let me look. " + call}
+    assert result["role"] == "user" and result["content"].endswith("notes.txt")
+
+
+def test_a_refusal_with_tools_on_shows_a_warning(shai):
+    run, services = shai
+    run("load", "qwen3")
+    services.engine.replies = [[{"content": "I cannot access your personal files."}]]
+    code, out = run("ask", "--files", "list Downloads")
+    assert code == 0 and "did not use them" in out
+    code, out = run("ask", "hi")
+    assert "did not use them" not in out

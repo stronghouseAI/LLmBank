@@ -338,3 +338,19 @@ def test_chat_offers_file_tools_only_when_asked(client):
     assert "tools" not in seen[0] and "files" not in seen[0]
     assert seen[1]["tools"][0]["function"]["name"] == "list_folder"
     assert "files" not in seen[1]
+
+
+def test_text_call_guidance_is_added_only_with_tools(client):
+    test_client, services = client
+    seen = []
+    services.engine.stream_chat = lambda payload: (
+        seen.append(payload) or iter([b"data: [DONE]\n\n"])
+    )
+    messages = [{"role": "user", "content": "hi"}]
+    test_client.post("/api/chat", json={"messages": messages, "text_tool_calls": True})
+    test_client.post(
+        "/api/chat", json={"messages": messages, "files": True, "text_tool_calls": True}
+    )
+    assert seen[0]["messages"] == messages and "text_tool_calls" not in seen[0]
+    assert "<tool_call>" in seen[1]["messages"][0]["content"]
+    assert "text_tool_calls" not in seen[1]

@@ -27,6 +27,7 @@ from stronghouse.cli.render import format_bytes, paint
 from stronghouse.config import Settings, load_settings
 from stronghouse.core.chat_files import (
     FILE_DENIED,
+    FILE_TOOLS,
     MAX_FILE_STEPS,
     describe_file_call,
     is_file_tool,
@@ -34,12 +35,19 @@ from stronghouse.core.chat_files import (
 from stronghouse.core.chat_web import (
     MAX_WEB_STEPS,
     WEB_DENIED,
+    WEB_TOOLS,
     ToolCallCollector,
     WebCall,
     describe_web_call,
     is_web_tool,
 )
 from stronghouse.core.log_view import LOG_SOURCES, find_source, report_text, shorten_home
+from stronghouse.core.text_tool_calls import (
+    TEXT_RESULT,
+    find_text_tool_calls,
+    looks_like_refusal,
+    starts_text_call,
+)
 from stronghouse.services.log_files import read_all_logs, read_log
 
 GIB = 1024**3
@@ -337,20 +345,45 @@ def _answer(api: ApiClient, messages: list[dict], options: ChatOptions) -> str:
     """One reply, using the internet or files only with the person's y/n for each call.
 
     The model's tool calls and their results are added to `messages`, so a chat keeps
-    what was found. After the step limit the tools are taken away and it must answer.
+    what was found. Calls written as text (models without native tool calls) are read
+    too. After the step limit the tools are taken away and it must answer.
     """
     limit = options.step_limit()
     for step in range(limit + 1):
         offer_tools = options.uses_tools() and step < limit
         answer, calls = _stream_reply(api, messages, options, offer_tools)
-        if not offer_tools or not calls:
+        if not offer_tools:
             return answer
-        parts = [call.as_message_part() for call in calls]
-        messages.append({"role": "assistant", "content": answer, "tool_calls": parts})
-        for call in calls:
+        if calls:
+            parts = [call.as_message_part() for call in calls]
+            messages.append({"role": "assistant", "content": answer, "tool_calls": parts})
+            for call in calls:
+                result = _run_tool_call(api, call, options)
+                messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
+            continue
+        text_calls = find_text_tool_calls(answer, _offered_tools(options))
+        if not text_calls:
+            if looks_like_refusal(answer):
+                print(paint(_IGNORED_TOOLS_WARNING, "yellow"))
+            return answer
+        messages.append({"role": "assistant", "content": answer})
+        for call in text_calls:
             result = _run_tool_call(api, call, options)
-            messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
+            messages.append(
+                {"role": "user", "content": TEXT_RESULT.format(name=call.name, result=result)}
+            )
     return answer
+
+
+_IGNORED_TOOLS_WARNING = (
+    "Note: the model said it cannot reach your files or the internet, but it was given "
+    "the tools and did not use them. Some models ignore tools. Try asking more directly, "
+    'e.g. "use list_folder on ~/Downloads", or a model known for tool use such as Qwen3.'
+)
+
+
+def _offered_tools(options: ChatOptions) -> set[str]:
+    return {*(WEB_TOOLS if options.web else ()), *(FILE_TOOLS if options.files else ())}
 
 
 def _tool_kind(name: str, options: ChatOptions) -> ToolKind | None:
@@ -398,7 +431,9 @@ def _stream_reply(
         body["chat_template_kwargs"] = {"enable_thinking": False}
     if offer_tools:
         body["web"], body["files"] = options.web, options.files
+        body["text_tool_calls"] = True
     started, thought_words, answer = time.monotonic(), 0, ""
+    shown = 0  # characters of the answer printed; a text tool call is not printed
     tool_calls = ToolCallCollector()
     try:
         for delta in api.stream_chat(body):
@@ -418,13 +453,23 @@ def _stream_reply(
                     seconds = int(time.monotonic() - started)
                     print(f"\r{paint(f'thought for {seconds}s ({thought_words} words)', 'dim')}\n")
                 answer += delta["content"]
-                print(delta["content"], end="", flush=True)
+                shown = _print_new_text(answer, shown, offer_tools)
             tool_calls.add(delta.get("tool_calls") or [])
     except KeyboardInterrupt:
         print(paint("\n(stopped)", "dim"))
         return answer, []
     print()
     return answer, tool_calls.calls()
+
+
+def _print_new_text(answer: str, shown: int, hide_calls: bool) -> int:
+    """Print the part of `answer` not yet shown, stopping where a text tool call starts."""
+    end = len(answer)
+    if hide_calls and (start := starts_text_call(answer)) >= 0:
+        end = start
+    if end > shown:
+        print(answer[shown:end], end="", flush=True)
+    return max(shown, end)
 
 
 # ---------- guild ----------

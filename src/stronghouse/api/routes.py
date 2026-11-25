@@ -13,9 +13,9 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from stronghouse.core.chat_files import is_file_tool, with_file_tools
+from stronghouse.core.chat_files import FILE_TOOLS, is_file_tool, with_file_tools
 from stronghouse.core.chat_transcript import ChatTurn, transcript_filename, transcript_text
-from stronghouse.core.chat_web import is_web_tool, with_web_tools
+from stronghouse.core.chat_web import WEB_TOOLS, is_web_tool, with_web_tools
 from stronghouse.core.hub_filters import (
     ModelKind,
     SearchFilters,
@@ -27,6 +27,7 @@ from stronghouse.core.hub_filters import (
 from stronghouse.core.launch_args import ExtraArgsError
 from stronghouse.core.models import KvCacheType, LibraryEntry, ModelProfile, PlanSettings
 from stronghouse.core.run_setup import forecast, plan_with_settings
+from stronghouse.core.text_tool_calls import with_text_call_guidance
 from stronghouse.services.engine import EngineError, EngineState
 from stronghouse.services.gguf_reader import GgufFormatError
 from stronghouse.services.skills import SkillError
@@ -92,6 +93,8 @@ class ChatRequest(BaseModel):
     web: bool = False
     # Offer the read-only file tools. Off by default: chat cannot see the computer.
     files: bool = False
+    # Also teach a plain-text call format, for models without native tool calls (ADR 0016).
+    text_tool_calls: bool = False
 
 
 class WebActionRequest(BaseModel):
@@ -227,11 +230,14 @@ def chat(body: ChatRequest, request: Request) -> StreamingResponse:
 
 
 def _chat_payload(body: ChatRequest) -> dict:
-    payload = body.model_dump(exclude={"web", "files"})
+    payload = body.model_dump(exclude={"web", "files", "text_tool_calls"})
     if body.web:
         payload = with_web_tools(payload, date.today().isoformat())
     if body.files:
         payload = with_file_tools(payload)
+    if body.text_tool_calls and (body.web or body.files):
+        names = (*(WEB_TOOLS if body.web else ()), *(FILE_TOOLS if body.files else ()))
+        payload = with_text_call_guidance(payload, names)
     return payload
 
 
