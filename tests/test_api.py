@@ -306,3 +306,35 @@ def test_chat_web_action_failure_goes_back_to_the_model_as_text(client):
         "result": "Error: example.org refused the request (403).",
         "ok": False,
     }
+
+
+def test_chat_file_action_lists_an_approved_folder(client):
+    test_client, services = client
+    services.skills = FakeSkills()
+    body = {"name": "list_folder", "arguments": {"path": "~/Downloads"}}
+    response = test_client.post("/api/chat/files", json=body)
+    assert response.json()["ok"] is True
+    assert services.skills.calls == [("list_folder", {"path": "~/Downloads"})]
+
+
+def test_chat_file_action_refuses_writing_commands_and_web(client):
+    test_client, services = client
+    services.skills = FakeSkills()
+    for name in ("write_file", "move_file", "run_command", "web_search"):
+        response = test_client.post("/api/chat/files", json={"name": name, "arguments": {}})
+        assert response.status_code == 400
+    assert services.skills.calls == []
+
+
+def test_chat_offers_file_tools_only_when_asked(client):
+    test_client, services = client
+    seen = []
+    services.engine.stream_chat = lambda payload: (
+        seen.append(payload) or iter([b"data: [DONE]\n\n"])
+    )
+    messages = [{"role": "user", "content": "hi"}]
+    test_client.post("/api/chat", json={"messages": messages})
+    test_client.post("/api/chat", json={"messages": messages, "files": True})
+    assert "tools" not in seen[0] and "files" not in seen[0]
+    assert seen[1]["tools"][0]["function"]["name"] == "list_folder"
+    assert "files" not in seen[1]

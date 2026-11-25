@@ -341,3 +341,60 @@ def test_web_command_switches_internet_inside_chat(shai):
     assert code == 0 and "Internet is on" in out
     with_web, without = services.engine.chat_bodies[-2:]
     assert "tools" in with_web and "tools" not in without
+
+
+def _list_call(path: str) -> list[dict]:
+    arguments = json.dumps({"path": path})
+    function = {"name": "list_folder", "arguments": arguments}
+    return [{"tool_calls": [{"index": 0, "id": "f1", "function": function}]}]
+
+
+def test_ask_with_files_lists_a_folder_after_yes(shai, tmp_path, monkeypatch):
+    run, services = shai
+    downloads = tmp_path / "home" / "Downloads"
+    downloads.mkdir(parents=True)
+    (downloads / "invoice.pdf").write_bytes(b"x")
+    (downloads / "music").mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    run("load", "qwen3")
+    services.engine.replies = [_list_call("~/Downloads"), [{"content": "You have 2 items."}]]
+    code, out = run("ask", "--files", "what is in my Downloads?", answers=["y"])
+    assert code == 0
+    assert "look at your files" in out and "List the folder ~/Downloads" in out
+    assert "You have 2 items." in out
+    first, second = services.engine.chat_bodies[-2:]
+    assert first["tools"][0]["function"]["name"] == "list_folder"
+    assert second["messages"][-1] == {
+        "role": "tool", "tool_call_id": "f1", "content": "music/\ninvoice.pdf",
+    }  # fmt: skip
+
+
+def test_saying_no_keeps_files_private(shai):
+    run, services = shai
+    run("load", "qwen3")
+    services.skills = FakeSkills()
+    services.engine.replies = [_list_call("~/Downloads"), [{"content": "I could not look."}]]
+    code, out = run("ask", "--files", "list Downloads", answers=[""])
+    assert code == 0 and "Denied." in out and "I could not look." in out
+    assert services.skills.calls == []
+    assert "did not allow" in services.engine.chat_bodies[-1]["messages"][-1]["content"]
+
+
+def test_tools_that_are_not_switched_on_are_never_run(shai):
+    run, services = shai
+    run("load", "qwen3")
+    services.skills = FakeSkills()
+    services.engine.replies = [_search_call("x"), [{"content": "Ok."}]]
+    code, out = run("ask", "--files", "hi", answers=[])
+    assert code == 0 and "chat cannot use" in out and "Ok." in out
+    assert services.skills.calls == []
+
+
+def test_files_command_switches_file_access_inside_chat(shai):
+    run, services = shai
+    run("load", "qwen3")
+    code, out = run("chat", answers=["/files", "hi", "/files off", "bye", "/exit"])
+    assert code == 0 and "File access is on" in out
+    with_files, without = services.engine.chat_bodies[-2:]
+    assert "list_folder" in str(with_files["tools"])
+    assert "tools" not in without and "files" not in without
