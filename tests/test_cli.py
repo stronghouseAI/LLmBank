@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from stronghouse.app import build_services, create_app
-from stronghouse.cli import commands
+from stronghouse.cli import commands, prompting
 from stronghouse.cli.client import ApiClient
 from stronghouse.config import load_settings
 from stronghouse.core.agents import Agent, ModelTurn, ToolCall
@@ -107,7 +107,7 @@ def shai(tmp_path: Path, capsys, monkeypatch):
         def run(*argv: str, answers: list[str] | None = None) -> tuple[int, str]:
             if answers is not None:  # typed replies for prompts
                 replies = iter(answers)
-                monkeypatch.setattr(commands, "prompt_user", lambda _prompt: next(replies))
+                monkeypatch.setattr(prompting, "prompt_user", lambda _prompt: next(replies))
             code = commands.run(list(argv), settings, api=api)
             output = capsys.readouterr()
             return code, output.out + output.err
@@ -202,7 +202,7 @@ def test_help_shows_the_full_reference(shai, words):
         "load MODEL",
         "discover QUERY",
         "--max-gb",
-        "quest AGENT",
+        "agentvault new",
         "EXAMPLES",
     ):
         assert command in out
@@ -455,3 +455,136 @@ def test_a_stale_background_app_is_reported(shai, monkeypatch):
     monkeypatch.setattr(commands, "build_id", lambda: "different")
     code, out = run("status")
     assert code == 0 and "older install" in out and "shai stop" in out
+
+
+# ---------- agent vault ----------
+
+
+def test_agentvault_new_with_yes_no_questions(shai):
+    run, services = shai
+    answers = [
+        "Researcher",  # name
+        "Find facts and save them as Markdown.",  # job
+        "y",  # read files
+        "y",  # write files
+        "n",  # PDFs
+        "y",  # internet
+        "n",  # commands
+        "n",  # apps / clipboard
+        "",  # numbers (default no)
+        "n",  # notes
+        "",  # keep exactly these skills (default yes)
+        "y",  # exact work -> temperature 0.2
+        "n",  # long tasks -> 10 steps
+        "",  # save (default yes)
+    ]
+    code, out = run("agentvault", "new", answers=answers)
+    assert code == 0 and "Saved Researcher" in out
+    agent = services.agents.list_agents()[0]
+    assert agent.personality == "Find facts and save them as Markdown."
+    assert agent.skills == [
+        "read_file", "list_folder", "search_files", "write_file", "move_file",
+        "fetch_web_page", "read_news_feed", "web_search",
+    ]  # fmt: skip
+    assert (agent.creativity, agent.diligence) == (2, 4)
+    assert "more than 5 skills" in out  # advice, not a rule
+
+
+def test_agentvault_new_lets_you_trim_the_suggested_skills(shai):
+    run, services = shai
+    answers = ["Clerk", "", "y", "n", "n", "n", "n", "n", "n", "n",
+               "n", "read_file", "", "", ""]  # fmt: skip
+    code, out = run("agentvault", "new", answers=answers)
+    assert code == 0, out
+    assert services.agents.list_agents()[0].skills == ["read_file"]
+
+
+def test_agentvault_new_in_one_line_and_names_stay_unique(shai):
+    run, services = shai
+    code, out = run(
+        "agentvault", "new", "Newsie", "--skills", "web_search,read_news_feed",
+        "--job", "UK headlines", "--temperature", "0.5", "--max-steps", "12",
+    )  # fmt: skip
+    assert code == 0, out
+    agent = services.agents.list_agents()[0]
+    assert agent.skills == ["web_search", "read_news_feed"]
+    assert (agent.creativity, agent.diligence) == (5, 5)
+    code, out = run("agentvault", "new", "newsie", "--skills", "")
+    assert code == 1 and "already have an agent" in out
+    code, out = run("agentvault", "new", "Other", "--skills", "teleport")
+    assert code == 1 and "not a skill" in out
+
+
+def test_agentvault_show_edit_and_skills(shai):
+    run, services = shai
+    run("agentvault", "new", "Filer", "--skills", "read_file")
+    code, out = run("agentvault", "add-skill", "filer", "write_file", "calculator")
+    assert code == 0 and "read_file, write_file, calculator" in out
+    code, out = run("agentvault", "remove-skill", "Filer", "calculator")
+    assert code == 0 and services.agents.list_agents()[0].skills == ["read_file", "write_file"]
+    code, out = run("agentvault", "remove-skill", "Filer", "web_search")
+    assert code == 1 and "does not have" in out
+    code, out = run("agentvault", "edit", "Filer", "--job", "Tidy my Downloads", "--name", "Tidy")
+    assert code == 0 and services.agents.list_agents()[0].name == "Tidy"
+    code, out = run("agentvault", "show", "tidy")
+    assert code == 0 and "Tidy my Downloads" in out and "temperature  0.3" in out
+    code, out = run("agentvault", "ls")
+    assert code == 0 and "Tidy" in out
+    code, out = run("agentvault", "skills")
+    assert code == 0 and "run_command" in out and "asks" in out
+
+
+def test_agentvault_edit_walks_through_and_enter_keeps_values(shai):
+    run, services = shai
+    run("agentvault", "new", "Keeper", "--skills", "read_file", "--job", "Keep things")
+    code, out = run("agentvault", "edit", "Keeper", answers=["", "", "", "", "20"])
+    assert code == 0, out
+    agent = services.agents.list_agents()[0]
+    assert (agent.name, agent.personality, agent.skills) == ("Keeper", "Keep things", ["read_file"])
+    assert agent.diligence == 9
+
+
+def test_agentvault_rm_asks_first(shai):
+    run, services = shai
+    run("agentvault", "new", "Temp", "--skills", "")
+    code, out = run("agentvault", "rm", "Temp", answers=[""])
+    assert code == 0 and "Kept." in out and services.agents.list_agents()
+    code, out = run("agentvault", "rm", "Temp", answers=["y"])
+    assert code == 0 and not services.agents.list_agents()
+
+
+def test_agentvault_export_and_import(shai, tmp_path: Path):
+    run, services = shai
+    run("agentvault", "new", "News Desk", "--skills", "web_search", "--job", "Headlines")
+    card = tmp_path / "desk.agent.json"
+    code, out = run("agentvault", "export", "News Desk", str(card))
+    assert code == 0 and json.loads(card.read_text())["skills"] == ["web_search"]
+    code, out = run("agentvault", "export", "News Desk", str(card))
+    assert code == 1 and "already exists" in out
+    code, out = run("agentvault", "import", str(card))
+    assert code == 1 and "--name" in out
+    code, out = run("agentvault", "import", str(card), "--name", "Desk Two")
+    assert code == 0 and [a.name for a in services.agents.list_agents()] == [
+        "News Desk", "Desk Two",
+    ]  # fmt: skip
+
+
+def test_card_filename_is_safe():
+    from stronghouse.cli.agentvault import card_filename
+
+    assert card_filename("News Desk!") == "news-desk.agent.json"
+    assert card_filename("../..") == "agent.agent.json"
+
+
+def test_agentvault_run_is_the_same_as_quest(shai, tmp_path: Path):
+    run, services = shai
+    note = tmp_path / "note.txt"
+    note.write_text("Blue.")
+    run("agentvault", "new", "Reader", "--skills", "read_file")
+    services.engine.started = ("model", None)
+    services.engine.turns = [
+        ModelTurn("", [ToolCall("c1", "read_file", json.dumps({"path": str(note)}))]),
+        ModelTurn("It says blue.", []),
+    ]
+    code, out = run("agentvault", "run", "Reader", "Read", "the", "note", answers=["n"])
+    assert code == 0 and "Denied." in out

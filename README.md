@@ -50,8 +50,12 @@ shai chat --files                      # or type /files inside chat to turn file
 shai discover qwen3 --max-gb 8 --moe   # Hugging Face search with filters
 shai files Qwen/Qwen3-8B-GGUF          # which files fit your computer
 shai get Qwen/Qwen3-8B-GGUF Qwen3-8B-Q4_K_M.gguf
-shai agents                            # your Guild
-shai quest Newsie "UK headlines into ~/Documents/news.md"   # y/n for every action
+shai agentvault new                    # build an agent: a few yes/no questions pick its skills
+shai agentvault new Newsie --skills "web_search,read_news_feed,write_file" --job "..."
+shai agentvault ls / show Newsie       # your agents (shai agents is the short form)
+shai agentvault add-skill Newsie read_pdf / remove-skill / edit / rm
+shai agentvault export Newsie / import newsie.agent.json   # share or back up
+shai agentvault run Newsie "UK headlines into ~/Documents/news.md"   # y/n for every action
 shai vault plan glm-4.5-air            # speed estimate and the best quantization for you
 shai job add "Write a full business plan for ..." --model glm   # queue it, walk away
 shai job ls / shai job show 3          # check on jobs; answers are also saved as files

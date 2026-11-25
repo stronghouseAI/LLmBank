@@ -3,7 +3,8 @@
     shai vault ls [search]          shai discover qwen3 --max-gb 8 --moe
     shai vault load qwen3-8b        shai files Qwen/Qwen3-8B-GGUF
     shai chat                       shai get Qwen/Qwen3-8B-GGUF Qwen3-8B-Q4_K_M.gguf
-    shai quest Newsie "..."         shai status
+    shai agentvault new             shai status
+    shai agentvault run Newsie ".." shai logs --problems
     shai job add "..." --model glm  shai job ls / show / cancel / retry
 
 Each command is a small function that calls the app's HTTP API and prints the
@@ -21,7 +22,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from stronghouse import __version__
-from stronghouse.cli import render
+from stronghouse.cli import prompting, render
+from stronghouse.cli.agentvault import add_agent_commands
 from stronghouse.cli.client import ApiClient, ApiError, connect, stop_background_server
 from stronghouse.cli.reference import HELP_WORDS, reference_text
 from stronghouse.cli.render import format_bytes, paint
@@ -72,11 +74,6 @@ FIT_TEXT = {
     "offload": ("GPU + RAM", "yellow"),
     "too_big": ("too big", "red"),
 }
-
-
-def prompt_user(prompt: str) -> str:
-    """Read one line from the person at the terminal (replaced in tests)."""
-    return input(prompt)
 
 
 # ---------- vault ----------
@@ -296,7 +293,7 @@ def chat(api: ApiClient, args: argparse.Namespace) -> None:
                 text, first = first, ""
                 print(paint("you> ", "brass") + text)
             else:
-                text = prompt_user(paint("you> ", "brass")).strip()
+                text = prompting.prompt_user(paint("you> ", "brass")).strip()
         except EOFError:
             print()
             return
@@ -408,7 +405,7 @@ def _run_tool_call(api: ApiClient, call: WebCall, options: ChatOptions) -> str:
     print(paint("\n" + kind.heading, "yellow", "bold"))
     print("  " + kind.describe(call.name, arguments))
     try:
-        answer = prompt_user(paint("Allow once? [y/N] ", "yellow")).strip().lower()
+        answer = prompting.prompt_user(paint("Allow once? [y/N] ", "yellow")).strip().lower()
     except EOFError:
         answer = ""
     if answer not in ("y", "yes"):
@@ -498,77 +495,6 @@ def _print_new_text(answer: str, shown: int, hide_calls: bool) -> int:
     if end > shown:
         print(answer[shown:end], end="", flush=True)
     return max(shown, end)
-
-
-# ---------- guild ----------
-
-
-def agents_ls(api: ApiClient, _args: argparse.Namespace) -> None:
-    agents = api.get("/agents")
-    if not agents:
-        print("No agents yet. Create one in the Guild tab of the app.")
-        return
-    rows = [
-        [
-            str(a["id"]),
-            f"{a['portrait'] or '👤'} {a['name']}",
-            str(a["level"]),
-            ", ".join(a["skills"]),
-        ]
-        for a in agents
-    ]
-    print(render.table(["id", "agent", "level", "skills"], rows))
-
-
-def quest(api: ApiClient, args: argparse.Namespace) -> None:
-    """Run a quest and ask y/n in the terminal for every action, like the app does."""
-    worker = _find_agent(api, args.agent)
-    party = [worker["id"]]
-    if args.reviewer:
-        party.append(_find_agent(api, args.reviewer)["id"])
-    current = api.post("/quests", {"task": " ".join(args.task), "agent_ids": party})
-    print(paint(f"Quest #{current['id']} started with {worker['name']}. Ctrl+C cancels.", "dim"))
-    printed = 0
-    answered = None  # the request already decided, until the quest moves on from it
-    try:
-        while True:
-            for step in current["steps"][printed:]:
-                print(f"{paint(step['agent_name'], 'bold')} {_step_text(step)}")
-            printed = len(current["steps"])
-            request = (printed, current["pending"])
-            if current["pending"] and request != answered:
-                answered = request
-                current = _decide(api, current)
-                continue
-            if current["state"] not in ("running", "waiting_approval"):
-                break
-            time.sleep(POLL_SECONDS)
-            current = api.get(f"/quests/{current['id']}")
-    except KeyboardInterrupt:
-        api.post(f"/quests/{current['id']}/cancel")
-        print(paint("\nQuest cancelled.", "yellow"))
-        return
-    if current["state"] == "done" and current["result"]:
-        print("\n" + paint("Result", "green", "bold") + "\n" + current["result"])
-    else:
-        print(paint(f"\nQuest {current['state']}.", "yellow"))
-
-
-def _decide(api: ApiClient, current: dict) -> dict:
-    pending = current["pending"]
-    print(paint(f"\n{pending['agent_name']} wants to use {pending['skill']}:", "yellow", "bold"))
-    for key, value in pending["arguments"].items():
-        shown = str(value) if len(str(value)) < 400 else str(value)[:400] + "…"
-        print(f"  {key}: {shown}")
-    answer = prompt_user(paint("Allow once? [y/N] ", "yellow")).strip().lower()
-    approve = answer in ("y", "yes")
-    print(paint("Allowed." if approve else "Denied.", "green" if approve else "red"))
-    return api.post(f"/quests/{current['id']}/decision", {"approve": approve})
-
-
-def _step_text(step: dict) -> str:
-    colour = {"tool_call": "cyan", "error": "red", "review": "green"}.get(step["kind"])
-    return paint(step["text"], colour) if colour else step["text"]
 
 
 # ---------- background jobs ----------
@@ -700,14 +626,6 @@ def _loose(name: str) -> str:
     return "".join(char for char in name.lower() if char.isalnum())
 
 
-def _find_agent(api: ApiClient, query: str) -> dict:
-    agents = api.get("/agents")
-    match = [a for a in agents if str(a["id"]) == query or a["name"].lower() == query.lower()]
-    if not match:
-        raise ApiError(f'No agent called "{query}". List them with: shai agents')
-    return match[0]
-
-
 def _with_best_file(api: ApiClient, models: list[dict], max_gb: float) -> list[dict]:
     """Keep repos with a file under the limit, noting the largest such file (best quality)."""
     limit = max_gb * GIB
@@ -778,14 +696,15 @@ def build_parser() -> argparse.ArgumentParser:
         description="StronghouseAI in the terminal. Starts the app in the background if needed.",
         epilog="Examples:  shai vault ls · shai vault load qwen3-8b"
         " · shai discover qwen3 --max-gb 8 --moe"
-        ' · shai chat · shai quest Newsie "UK headlines to ~/news.md"',
+        " · shai chat · shai agentvault new"
+        ' · shai agentvault run Newsie "UK headlines to ~/news.md"',
     )
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
     for add_section in (
         _add_vault,
         _add_discover,
         _add_chat,
-        _add_guild,
+        add_agent_commands,
         _add_job_commands,
         _add_system,
     ):
@@ -880,15 +799,6 @@ def _add_chat(commands: argparse._SubParsersAction) -> None:
         sub.set_defaults(handler=handler)
 
     commands.add_parser("bench", help="speed test the loaded model").set_defaults(handler=bench)
-
-
-def _add_guild(commands: argparse._SubParsersAction) -> None:
-    commands.add_parser("agents", help="list your agents").set_defaults(handler=agents_ls)
-    qst = commands.add_parser("quest", help="send an agent on a quest (asks before every action)")
-    qst.add_argument("agent", help="agent name or id")
-    qst.add_argument("task", nargs="+")
-    qst.add_argument("--reviewer", help="a second agent who checks the work")
-    qst.set_defaults(handler=quest)
 
 
 def _add_system(commands: argparse._SubParsersAction) -> None:
