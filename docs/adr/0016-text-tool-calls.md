@@ -25,3 +25,14 @@ or their training makes them refuse before they think of the tools.
 ## Consequences
 - Native tool calls still win; the text format is only read when there are none.
 - The browser Chat page does not send `text_tool_calls` yet.
+
+## Addendum: stale app and debug view (2026-11-25)
+phil's first tests after PR 21 and PR 22 still refused. `shai` reuses an app already running
+in the background, and that app was started before the reinstall: it took `files: true` as an
+unknown extra field and passed it on to llama-server, which ignored it, so no tools were sent.
+- `GET /api/about` returns the app's version and a fingerprint of its source files
+  (`services/build_info.py`). Every `shai` command compares it with its own and prints how to
+  restart (`shai stop`) when they differ.
+- `shai chat --debug` / `shai ask --debug` print the tools sent, the prompt exactly as the
+  model's own template renders it (llama-server's `/apply-template`, via `POST /api/chat/preview`)
+  and the raw reply, including any tool-call text.

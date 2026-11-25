@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from stronghouse import __version__
 from stronghouse.core.chat_files import FILE_TOOLS, is_file_tool, with_file_tools
 from stronghouse.core.chat_transcript import ChatTurn, transcript_filename, transcript_text
 from stronghouse.core.chat_web import WEB_TOOLS, is_web_tool, with_web_tools
@@ -28,6 +29,7 @@ from stronghouse.core.launch_args import ExtraArgsError
 from stronghouse.core.models import KvCacheType, LibraryEntry, ModelProfile, PlanSettings
 from stronghouse.core.run_setup import forecast, plan_with_settings
 from stronghouse.core.text_tool_calls import with_text_call_guidance
+from stronghouse.services.build_info import build_id
 from stronghouse.services.engine import EngineError, EngineState
 from stronghouse.services.gguf_reader import GgufFormatError
 from stronghouse.services.skills import SkillError
@@ -239,6 +241,26 @@ def _chat_payload(body: ChatRequest) -> dict:
         names = (*(WEB_TOOLS if body.web else ()), *(FILE_TOOLS if body.files else ()))
         payload = with_text_call_guidance(payload, names)
     return payload
+
+
+@router.post("/chat/preview")
+def chat_preview(body: ChatRequest, request: Request) -> dict:
+    """What a chat request becomes before it reaches the model, for `shai chat --debug`:
+    the payload with tools and system notes added, and the prompt as the model's own
+    template renders it ("" if the engine cannot show it)."""
+    payload = _chat_payload(body)
+    try:
+        prompt = request.app.state.services.engine.render_prompt(payload)
+    except (EngineError, httpx.HTTPError) as error:
+        log.warning("chat preview could not render the prompt: %s", error)
+        prompt = ""
+    return {"payload": payload, "prompt": prompt}
+
+
+@router.get("/about")
+def about() -> dict:
+    """The app's version and code fingerprint; `shai` compares it with its own."""
+    return {"version": __version__, "build": build_id()}
 
 
 @router.post("/chat/web")

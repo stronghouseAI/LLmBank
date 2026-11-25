@@ -13,6 +13,7 @@ answer. See docs/adr/0009-terminal-client.md.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from collections.abc import Callable
@@ -48,6 +49,7 @@ from stronghouse.core.text_tool_calls import (
     looks_like_refusal,
     starts_text_call,
 )
+from stronghouse.services.build_info import build_id
 from stronghouse.services.log_files import read_all_logs, read_log
 
 GIB = 1024**3
@@ -235,10 +237,11 @@ class ChatOptions:
     show_thinking: bool = False
     web: bool = False  # offer the internet tools; every use is asked for with y/n
     files: bool = False  # offer the read-only file tools; every use is asked for with y/n
+    debug: bool = False  # print what the model is sent and its raw output
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> ChatOptions:
-        return cls(not args.no_think, args.show_thinking, args.web, args.files)
+        return cls(not args.no_think, args.show_thinking, args.web, args.files, args.debug)
 
     def uses_tools(self) -> bool:
         return self.web or self.files
@@ -432,6 +435,8 @@ def _stream_reply(
     if offer_tools:
         body["web"], body["files"] = options.web, options.files
         body["text_tool_calls"] = True
+    if options.debug:
+        _print_debug_prompt(api, body)
     started, thought_words, answer = time.monotonic(), 0, ""
     shown = 0  # characters of the answer printed; a text tool call is not printed
     tool_calls = ToolCallCollector()
@@ -453,13 +458,36 @@ def _stream_reply(
                     seconds = int(time.monotonic() - started)
                     print(f"\r{paint(f'thought for {seconds}s ({thought_words} words)', 'dim')}\n")
                 answer += delta["content"]
-                shown = _print_new_text(answer, shown, offer_tools)
+                shown = _print_new_text(answer, shown, offer_tools and not options.debug)
             tool_calls.add(delta.get("tool_calls") or [])
     except KeyboardInterrupt:
         print(paint("\n(stopped)", "dim"))
         return answer, []
     print()
+    if options.debug:
+        _print_debug_calls(tool_calls.calls())
     return answer, tool_calls.calls()
+
+
+def _print_debug_prompt(api: ApiClient, body: dict) -> None:
+    """Show exactly what the model will read: its template's prompt, or the request."""
+    preview = api.post("/chat/preview", body)
+    tools = [tool["function"]["name"] for tool in preview["payload"].get("tools", [])]
+    print(paint(f"[debug] tools sent: {', '.join(tools) or 'none'}", "cyan"))
+    if preview["prompt"]:
+        print(paint("[debug] prompt as the model's template renders it:", "cyan"))
+        print(paint(preview["prompt"], "dim"))
+    else:
+        print(paint("[debug] the engine could not render the prompt; messages sent:", "cyan"))
+        print(paint(json.dumps(preview["payload"]["messages"], indent=2), "dim"))
+    print(paint("[debug] model output:", "cyan"))
+
+
+def _print_debug_calls(calls: list[WebCall]) -> None:
+    for call in calls:
+        print(paint(f"[debug] native tool call: {call.name} {call.arguments}", "cyan"))
+    if not calls:
+        print(paint("[debug] no native tool calls", "cyan"))
 
 
 def _print_new_text(answer: str, shown: int, hide_calls: bool) -> int:
@@ -844,6 +872,11 @@ def _add_chat(commands: argparse._SubParsersAction) -> None:
             action="store_true",
             help="let the model read your files and folders; asks y/n before every one",
         )
+        sub.add_argument(
+            "--debug",
+            action="store_true",
+            help="show the exact prompt the model gets and its raw output",
+        )
         sub.set_defaults(handler=handler)
 
     commands.add_parser("bench", help="speed test the loaded model").set_defaults(handler=bench)
@@ -951,6 +984,7 @@ def run(argv: list[str], settings: Settings, api: ApiClient | None = None) -> in
         return 0
     try:
         api = api or connect(settings)
+        _warn_if_app_is_stale(api)
         args.handler(api, args)
     except ApiError as error:
         print(paint(f"Error: {error}", "red"), file=sys.stderr)
@@ -958,6 +992,24 @@ def run(argv: list[str], settings: Settings, api: ApiClient | None = None) -> in
     except KeyboardInterrupt:
         return 130
     return 0
+
+
+STALE_APP_WARNING = (
+    "The StronghouseAI app running in the background is from an older install, so new "
+    "options (like --files) are ignored. Restart it: shai stop, then run your command "
+    "again and load your model with shai load. If you started it with `stronghouse`, "
+    "close that window instead."
+)
+
+
+def _warn_if_app_is_stale(api: ApiClient) -> None:
+    """Warn when the running app's code differs from this `shai` (it was not restarted)."""
+    try:
+        running = api.get("/about").get("build")
+    except ApiError:
+        running = None  # apps from before this check have no /about
+    if running != build_id():
+        print(paint(STALE_APP_WARNING, "yellow", "bold"), file=sys.stderr)
 
 
 def main() -> None:

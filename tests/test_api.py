@@ -40,6 +40,9 @@ class FakeEngine:
     def benchmark(self):
         raise EngineError("No model is loaded and ready yet.")
 
+    def render_prompt(self, payload):
+        raise EngineError("No model is loaded and ready yet.")
+
 
 @pytest.fixture
 def client(tmp_path: Path):
@@ -354,3 +357,19 @@ def test_text_call_guidance_is_added_only_with_tools(client):
     assert seen[0]["messages"] == messages and "text_tool_calls" not in seen[0]
     assert "<tool_call>" in seen[1]["messages"][0]["content"]
     assert "text_tool_calls" not in seen[1]
+
+
+def test_about_reports_the_code_fingerprint(client):
+    from stronghouse.services.build_info import build_id
+
+    test_client, _ = client
+    about = test_client.get("/api/about").json()
+    assert about["build"] == build_id() and len(about["build"]) == 12
+
+
+def test_chat_preview_shows_the_payload_even_without_a_model(client):
+    test_client, _ = client
+    body = {"messages": [{"role": "user", "content": "hi"}], "files": True}
+    preview = test_client.post("/api/chat/preview", json=body).json()
+    assert preview["prompt"] == ""
+    assert preview["payload"]["tools"][0]["function"]["name"] == "list_folder"

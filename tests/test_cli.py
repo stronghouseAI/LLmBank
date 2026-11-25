@@ -58,6 +58,9 @@ class FakeEngine:
     def complete_chat(self, messages, tools, temperature):
         return self.turns.pop(0)
 
+    def render_prompt(self, payload):
+        return "<|system|>" + payload["messages"][0]["content"]
+
 
 class FakeHub:
     def search_models(self, query, filters=None):
@@ -429,3 +432,26 @@ def test_a_refusal_with_tools_on_shows_a_warning(shai):
     assert code == 0 and "did not use them" in out
     code, out = run("ask", "hi")
     assert "did not use them" not in out
+
+
+def test_debug_shows_the_prompt_and_raw_output(shai):
+    run, services = shai
+    run("load", "qwen3")
+    call = '<tool_call>{"name": "list_folder", "arguments": {"path": "~"}}</tool_call>'
+    services.skills = FakeSkills()
+    services.engine.replies = [[{"content": call}], [{"content": "Done."}]]
+    code, out = run("ask", "--files", "--debug", "list home", answers=["n"])
+    assert code == 0
+    assert "[debug] tools sent: list_folder, read_file, search_files, read_pdf" in out
+    assert "<|system|>You can look at files" in out
+    assert call in out  # raw output is not hidden in debug mode
+    assert "[debug] no native tool calls" in out
+
+
+def test_a_stale_background_app_is_reported(shai, monkeypatch):
+    run, _ = shai
+    code, out = run("status")
+    assert "older install" not in out
+    monkeypatch.setattr(commands, "build_id", lambda: "different")
+    code, out = run("status")
+    assert code == 0 and "older install" in out and "shai stop" in out
