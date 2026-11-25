@@ -70,6 +70,7 @@ SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             ("  --show-thinking", "Print the model's thinking as it goes"),
             ("  --web", "Let the model search the web and read pages. Asks y/n every time"),
             ("  --files", "Let the model list folders and read files. Asks y/n every time"),
+            ("  --debug", "Show the exact prompt the model gets and its raw reply"),
             ("bench", "Speed test: tokens per second"),
         ],
     ),

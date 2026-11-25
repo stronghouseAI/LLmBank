@@ -184,6 +184,19 @@ class EngineController:
         ]
         return ModelTurn(content=message.get("content") or "", tool_calls=calls)
 
+    def render_prompt(self, payload: dict) -> str:
+        """The exact text the model reads for this request, from llama-server's own
+        chat template (its /apply-template endpoint). For `shai chat --debug`.
+
+        Raises:
+            EngineError: if no model is ready.
+            httpx.HTTPError: if the engine refuses or fails.
+        """
+        self._require_ready()
+        response = self._http.post(f"{self.base_url}/apply-template", json=payload)
+        response.raise_for_status()
+        return str(response.json().get("prompt", ""))
+
     def stream_chat(self, payload: dict) -> Iterator[bytes]:
         """Forward an OpenAI-style chat request and stream the raw SSE bytes back."""
         self._require_ready()
