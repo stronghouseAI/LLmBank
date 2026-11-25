@@ -97,8 +97,8 @@ def is_web_tool(name: str) -> bool:
     return name in WEB_TOOLS
 
 
-def web_tool_definitions() -> list[dict]:
-    """OpenAI-style tool list for the web skills, the same ones agents equip."""
+def tool_definitions(names: tuple[str, ...]) -> list[dict]:
+    """OpenAI-style tool list for skills from the catalog, the same ones agents equip."""
     return [
         {
             "type": "function",
@@ -108,20 +108,30 @@ def web_tool_definitions() -> list[dict]:
                 "parameters": SKILLS[name].parameters,
             },
         }
-        for name in WEB_TOOLS
+        for name in names
     ]
 
 
-def with_web_tools(payload: dict, today: str) -> dict:
-    """A copy of a chat request that offers the web tools and says when to use them.
+def web_tool_definitions() -> list[dict]:
+    return tool_definitions(WEB_TOOLS)
+
+
+def offer_tools(payload: dict, names: tuple[str, ...], guidance: str) -> dict:
+    """A copy of a chat request that also offers these tools and says when to use them.
 
     The guidance goes into the conversation's system message, or a new one at the top,
-    so templates that allow only one system message still work.
+    so templates that allow only one system message still work. Tools already offered
+    are kept, so web and file tools can be offered together.
     """
-    guidance = WEB_GUIDANCE.format(today=today)
     messages = [dict(message) for message in payload["messages"]]
     if messages and messages[0].get("role") == "system":
         messages[0]["content"] = f"{messages[0].get('content') or ''}\n\n{guidance}".strip()
     else:
         messages.insert(0, {"role": "system", "content": guidance})
-    return {**payload, "messages": messages, "tools": web_tool_definitions()}
+    tools = [*payload.get("tools", []), *tool_definitions(names)]
+    return {**payload, "messages": messages, "tools": tools}
+
+
+def with_web_tools(payload: dict, today: str) -> dict:
+    """A copy of a chat request that offers the web tools (see offer_tools)."""
+    return offer_tools(payload, WEB_TOOLS, WEB_GUIDANCE.format(today=today))

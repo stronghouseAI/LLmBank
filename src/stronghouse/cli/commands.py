@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,12 +25,19 @@ from stronghouse.cli.client import ApiClient, ApiError, connect, stop_background
 from stronghouse.cli.reference import HELP_WORDS, reference_text
 from stronghouse.cli.render import format_bytes, paint
 from stronghouse.config import Settings, load_settings
+from stronghouse.core.chat_files import (
+    FILE_DENIED,
+    MAX_FILE_STEPS,
+    describe_file_call,
+    is_file_tool,
+)
 from stronghouse.core.chat_web import (
     MAX_WEB_STEPS,
     WEB_DENIED,
     ToolCallCollector,
     WebCall,
     describe_web_call,
+    is_web_tool,
 )
 from stronghouse.core.log_view import LOG_SOURCES, find_source, report_text, shorten_home
 from stronghouse.services.log_files import read_all_logs, read_log
@@ -218,10 +226,45 @@ class ChatOptions:
     think: bool = True
     show_thinking: bool = False
     web: bool = False  # offer the internet tools; every use is asked for with y/n
+    files: bool = False  # offer the read-only file tools; every use is asked for with y/n
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> ChatOptions:
-        return cls(not args.no_think, args.show_thinking, args.web)
+        return cls(not args.no_think, args.show_thinking, args.web, args.files)
+
+    def uses_tools(self) -> bool:
+        return self.web or self.files
+
+    def step_limit(self) -> int:
+        """Tool calls one reply may make before the model has to answer."""
+        return MAX_FILE_STEPS if self.files else MAX_WEB_STEPS
+
+
+@dataclass(frozen=True)
+class ToolKind:
+    """How one family of chat tools is put to the person and carried out."""
+
+    heading: str
+    describe: Callable[[str, dict], str]
+    denied: str  # what the model hears after a no
+    endpoint: str
+    working: str
+
+
+WEB_KIND = ToolKind(
+    "The model wants to use the internet:",
+    describe_web_call,
+    WEB_DENIED,
+    "/chat/web",
+    "Going online…",
+)
+FILES_KIND = ToolKind(
+    "The model wants to look at your files:",
+    describe_file_call,
+    FILE_DENIED,
+    "/chat/files",
+    "Reading…",
+)
 
 
 def ask(api: ApiClient, args: argparse.Namespace) -> None:
@@ -233,6 +276,7 @@ def chat(api: ApiClient, args: argparse.Namespace) -> None:
     options = ChatOptions.from_args(args)
     print(paint("Chat with the loaded model. /clear starts over, /exit or Ctrl+D quits.", "dim"))
     print(paint(_web_state_text(options.web), "dim"))
+    print(paint(_files_state_text(options.files), "dim"))
     messages: list[dict] = []
     first = " ".join(args.prompt).strip()  # `shai chat how are you` opens with that message
     while True:
@@ -252,8 +296,12 @@ def chat(api: ApiClient, args: argparse.Namespace) -> None:
             print(paint("Started a new conversation.", "dim"))
             continue
         if text.split()[:1] == ["/web"]:
-            options.web = _web_switch(text, options.web)
+            options.web = _switch(text, options.web)
             print(paint(_web_state_text(options.web), "dim"))
+            continue
+        if text.split()[:1] == ["/files"]:
+            options.files = _switch(text, options.files)
+            print(paint(_files_state_text(options.files), "dim"))
             continue
         if not text:
             continue
@@ -262,8 +310,8 @@ def chat(api: ApiClient, args: argparse.Namespace) -> None:
         messages.append({"role": "assistant", "content": reply})
 
 
-def _web_switch(command: str, current: bool) -> bool:
-    """`/web` flips internet access, `/web on` and `/web off` set it."""
+def _switch(command: str, current: bool) -> bool:
+    """`/web` or `/files` flips the option, adding `on` or `off` sets it."""
     word = command.split()[1:2]
     if word in (["on"], ["off"]):
         return word == ["on"]
@@ -276,39 +324,62 @@ def _web_state_text(web: bool) -> str:
     return "Internet is off. /web turns it on (asks before every search or page)."
 
 
-def _answer(api: ApiClient, messages: list[dict], options: ChatOptions) -> str:
-    """One reply, going online only with the person's y/n for each search or page.
+def _files_state_text(files: bool) -> str:
+    if files:
+        return (
+            "File access is on (read only): you are asked y/n before every folder or file. "
+            "/files off stops it."
+        )
+    return "File access is off. /files lets the model read your files (asks every time)."
 
-    The model's web calls and their results are added to `messages`, so a chat keeps
-    what was found. After MAX_WEB_STEPS the tools are taken away and it must answer.
+
+def _answer(api: ApiClient, messages: list[dict], options: ChatOptions) -> str:
+    """One reply, using the internet or files only with the person's y/n for each call.
+
+    The model's tool calls and their results are added to `messages`, so a chat keeps
+    what was found. After the step limit the tools are taken away and it must answer.
     """
-    for step in range(MAX_WEB_STEPS + 1):
-        offer_web = options.web and step < MAX_WEB_STEPS
-        answer, calls = _stream_reply(api, messages, options, offer_web)
-        if not offer_web or not calls:
+    limit = options.step_limit()
+    for step in range(limit + 1):
+        offer_tools = options.uses_tools() and step < limit
+        answer, calls = _stream_reply(api, messages, options, offer_tools)
+        if not offer_tools or not calls:
             return answer
         parts = [call.as_message_part() for call in calls]
         messages.append({"role": "assistant", "content": answer, "tool_calls": parts})
         for call in calls:
-            result = _run_web_call(api, call)
+            result = _run_tool_call(api, call, options)
             messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
     return answer
 
 
-def _run_web_call(api: ApiClient, call: WebCall) -> str:
-    """Ask y/n for one web call; run it if allowed. Returns what the model hears back."""
+def _tool_kind(name: str, options: ChatOptions) -> ToolKind | None:
+    """Which switched-on family a tool belongs to, or None if it is not allowed now."""
+    if options.web and is_web_tool(name):
+        return WEB_KIND
+    if options.files and is_file_tool(name):
+        return FILES_KIND
+    return None
+
+
+def _run_tool_call(api: ApiClient, call: WebCall, options: ChatOptions) -> str:
+    """Ask y/n for one tool call; run it if allowed. Returns what the model hears back."""
+    kind = _tool_kind(call.name, options)
+    if kind is None:
+        print(paint(f"\nThe model asked for '{call.name}', which chat cannot use.", "dim"))
+        return f"There is no tool called {call.name}. Answer without it."
     arguments = call.parsed_arguments()
-    print(paint("\nThe model wants to use the internet:", "yellow", "bold"))
-    print("  " + describe_web_call(call.name, arguments))
+    print(paint("\n" + kind.heading, "yellow", "bold"))
+    print("  " + kind.describe(call.name, arguments))
     try:
         answer = prompt_user(paint("Allow once? [y/N] ", "yellow")).strip().lower()
     except EOFError:
         answer = ""
     if answer not in ("y", "yes"):
         print(paint("Denied. The model answers without it.", "red"))
-        return WEB_DENIED
-    print(paint("Going online…", "dim"))
-    outcome = api.post("/chat/web", {"name": call.name, "arguments": arguments})
+        return kind.denied
+    print(paint(kind.working, "dim"))
+    outcome = api.post(kind.endpoint, {"name": call.name, "arguments": arguments})
     found = outcome["result"]
     summary = f"Found {len(found):,} characters." if outcome["ok"] else f"It did not work: {found}"
     print(paint(summary, "green" if outcome["ok"] else "red"))
@@ -316,17 +387,17 @@ def _run_web_call(api: ApiClient, call: WebCall) -> str:
 
 
 def _stream_reply(
-    api: ApiClient, messages: list[dict], options: ChatOptions, offer_web: bool
+    api: ApiClient, messages: list[dict], options: ChatOptions, offer_tools: bool
 ) -> tuple[str, list[WebCall]]:
-    """Print the reply as it arrives and return it with any web calls the model asked for.
+    """Print the reply as it arrives and return it with any tool calls the model asked for.
 
     Thinking shows as a counter, or dim text if asked.
     """
     body: dict = {"messages": messages}
     if not options.think:
         body["chat_template_kwargs"] = {"enable_thinking": False}
-    if offer_web:
-        body["web"] = True
+    if offer_tools:
+        body["web"], body["files"] = options.web, options.files
     started, thought_words, answer = time.monotonic(), 0, ""
     tool_calls = ToolCallCollector()
     try:
@@ -722,6 +793,11 @@ def _add_chat(commands: argparse._SubParsersAction) -> None:
             "--web",
             action="store_true",
             help="let the model use the internet; asks y/n before every search or page",
+        )
+        sub.add_argument(
+            "--files",
+            action="store_true",
+            help="let the model read your files and folders; asks y/n before every one",
         )
         sub.set_defaults(handler=handler)
 

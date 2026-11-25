@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from stronghouse.core.chat_files import is_file_tool, with_file_tools
 from stronghouse.core.chat_transcript import ChatTurn, transcript_filename, transcript_text
 from stronghouse.core.chat_web import is_web_tool, with_web_tools
 from stronghouse.core.hub_filters import (
@@ -89,10 +90,12 @@ class ChatRequest(BaseModel):
     messages: list[dict] = Field(min_length=1)
     # Offer the model the web tools. Off by default: chat stays offline unless asked.
     web: bool = False
+    # Offer the read-only file tools. Off by default: chat cannot see the computer.
+    files: bool = False
 
 
 class WebActionRequest(BaseModel):
-    """One web tool call the user approved on the Chat page."""
+    """One web or file tool call the user approved (Chat page or `shai chat`)."""
 
     name: str
     arguments: dict
@@ -224,9 +227,11 @@ def chat(body: ChatRequest, request: Request) -> StreamingResponse:
 
 
 def _chat_payload(body: ChatRequest) -> dict:
-    payload = body.model_dump(exclude={"web"})
+    payload = body.model_dump(exclude={"web", "files"})
     if body.web:
         payload = with_web_tools(payload, date.today().isoformat())
+    if body.files:
+        payload = with_file_tools(payload)
     return payload
 
 
@@ -244,6 +249,24 @@ def chat_web_action(body: WebActionRequest, request: Request) -> dict:
         result = request.app.state.services.skills.execute(0, body.name, body.arguments)
     except SkillError as error:
         log.warning("chat web action failed: %s", error)
+        return {"result": f"Error: {error}", "ok": False}
+    return {"result": result, "ok": True}
+
+
+@router.post("/chat/files")
+def chat_file_action(body: WebActionRequest, request: Request) -> dict:
+    """List a folder or read a file for `shai chat --files`.
+
+    The terminal calls this only after the user typed y for this exact request. Only the
+    read-only file skills run here; a failure is returned as text for the model.
+    """
+    if not is_file_tool(body.name):
+        raise HTTPException(400, f"Chat can only read files, not use '{body.name}'.")
+    log.info("chat file action", extra={"tool": body.name, "arguments": body.arguments})
+    try:
+        result = request.app.state.services.skills.execute(0, body.name, body.arguments)
+    except SkillError as error:
+        log.warning("chat file action failed: %s", error)
         return {"result": f"Error: {error}", "ok": False}
     return {"result": result, "ok": True}
 
