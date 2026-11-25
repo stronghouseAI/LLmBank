@@ -101,7 +101,7 @@ def _new_body(api: ApiClient, args: argparse.Namespace) -> dict | None:
     existing = api.get("/agents")
     walk_through = args.name is None or args.skills is None
     if walk_through:
-        print(paint("New agent, built from scratch. For y/n questions, Enter picks the capital letter.", "bold"))
+        print(paint("New agent, built from scratch. For y/n, Enter picks the capital.", "bold"))
     name = args.name or _ask_text("Name: ", required=True)
     _check_name_is_free(name, existing)
     job = args.job if args.job is not None else ""
