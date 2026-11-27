@@ -103,3 +103,16 @@ def test_scan_finds_models_in_owner_repo_folders(tmp_path: Path):
         ("owner/repo", "a.gguf"),
         ("owner/repo", "sub/b.gguf"),
     ]
+
+
+def test_scan_follows_folders_linked_from_another_drive(tmp_path: Path):
+    other_drive = tmp_path / "ssd2" / "unsloth"
+    (other_drive / "GLM-GGUF").mkdir(parents=True)
+    (other_drive / "GLM-GGUF" / "glm.gguf").write_bytes(b"")
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "unsloth").symlink_to(other_drive)
+    (other_drive / "GLM-GGUF" / "loop").symlink_to(other_drive)  # must not recurse forever
+
+    found = archive.scan_archive(vault)
+    assert [(f.repo_id, f.filename) for f in found] == [("unsloth/GLM-GGUF", "glm.gguf")]

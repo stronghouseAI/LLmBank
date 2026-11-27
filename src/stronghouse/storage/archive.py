@@ -13,6 +13,7 @@ can be rebuilt with `scan_archive`. See docs/adr/0003-archive-layout.md.
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -90,11 +91,15 @@ class FoundModel:
 
 
 def scan_archive(archive_dir: Path) -> list[FoundModel]:
-    """Find every .gguf file under <owner>/<repo>/ folders in the archive."""
+    """Find every .gguf file under <owner>/<repo>/ folders in the archive.
+
+    Symlinked folders are followed, so models on another drive (a second SSD) can be
+    linked into the archive. Each real folder is visited once, so a link loop is safe.
+    """
     found = []
     if not archive_dir.exists():
         return found
-    for path in sorted(archive_dir.rglob("*.gguf")):
+    for path in sorted(_gguf_files(archive_dir)):
         relative = path.relative_to(archive_dir).parts
         if len(relative) < 3:
             continue  # not inside an <owner>/<repo>/ folder
@@ -106,3 +111,16 @@ def scan_archive(archive_dir: Path) -> list[FoundModel]:
             )
         )
     return found
+
+
+def _gguf_files(root: Path) -> list[Path]:
+    files: list[Path] = []
+    seen: set[str] = set()
+    for folder, subfolders, names in os.walk(root, followlinks=True):
+        real = os.path.realpath(folder)
+        if real in seen:
+            subfolders.clear()
+            continue
+        seen.add(real)
+        files += [Path(folder) / name for name in names if name.endswith(".gguf")]
+    return files
