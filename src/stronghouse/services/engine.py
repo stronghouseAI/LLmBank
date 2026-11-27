@@ -23,6 +23,8 @@ from stronghouse.core.models import LaunchPlan
 log = logging.getLogger(__name__)
 
 VERSION_TIMEOUT_SECONDS = 10
+# Starting each GPU backend to list devices can take a few seconds on first run.
+LIST_DEVICES_TIMEOUT_SECONDS = 20
 STOP_TIMEOUT_SECONDS = 15
 LOG_TAIL_LINES = 40
 BENCHMARK_PROMPT = "Write a short paragraph explaining how a mixture-of-experts model works."
@@ -76,6 +78,7 @@ class EngineController:
         self._command: list[str] = []
         self._lock = threading.Lock()
         self._cached_version: str | None = None
+        self._cached_devices: str | None = None
 
     @property
     def base_url(self) -> str:
@@ -97,6 +100,28 @@ class EngineController:
             version_lines = [line for line in lines if "version" in line.lower()]
             self._cached_version = (version_lines or lines or [""])[0].strip() or None
         return self._cached_version
+
+    def list_devices(self) -> str | None:
+        """`llama-server --list-devices` output (which GPUs and backend it can use).
+
+        Asked once and then remembered, because the build does not change while the
+        app runs. Returns None if llama-server is missing or does not know the flag.
+        """
+        if self._cached_devices is None:
+            try:
+                result = subprocess.run(
+                    [self._executable, "--list-devices"],
+                    capture_output=True,
+                    text=True,
+                    timeout=LIST_DEVICES_TIMEOUT_SECONDS,
+                )
+            except (OSError, subprocess.SubprocessError):
+                return None
+            if result.returncode != 0:
+                log.info("llama-server --list-devices failed", extra={"code": result.returncode})
+                return None
+            self._cached_devices = result.stdout + result.stderr
+        return self._cached_devices
 
     def start(self, model_path: Path, plan: LaunchPlan) -> EngineStatus:
         """Launch llama-server with the plan, replacing any running model.

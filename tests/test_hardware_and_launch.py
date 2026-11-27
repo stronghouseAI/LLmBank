@@ -36,7 +36,7 @@ def test_probe_survives_failing_nvidia_smi(tmp_path: Path):
     def failing(_command):
         raise OSError("no driver")
 
-    profile = probe_hardware(run_command=failing, meminfo_path=meminfo)
+    profile = probe_hardware(run_command=failing, meminfo_path=meminfo, drm_dir=tmp_path)
     assert not profile.has_gpu
     assert profile.ram_available_bytes == 20000000 * 1024
 

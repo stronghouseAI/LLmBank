@@ -6,8 +6,12 @@ the small always-used parts (attention, norms, shared layers, KV cache) stay on
 the GPU. llama.cpp exposes this as `--n-cpu-moe N`: keep the expert weights of
 the first N blocks on the CPU. See docs/adr/0002-offload-planner.md.
 
+The same plan works for CUDA (NVIDIA), Vulkan and ROCm (AMD): --n-cpu-moe and
+--n-gpu-layers mean the same thing on every backend. Only the memory each backend
+keeps for itself differs (see GPU_RESERVE_BY_BACKEND).
+
 All numbers here are estimates. The real usage also depends on the llama.cpp
-build, CUDA version and batch size, which is why the app offers a speed test
+build, driver version and batch size, which is why the app offers a speed test
 after planning instead of trusting the plan blindly.
 """
 
@@ -16,6 +20,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from stronghouse.core.models import (
+    GpuBackend,
     HardwareProfile,
     KvCacheType,
     LaunchPlan,
@@ -30,6 +35,14 @@ MIB = 1024 * 1024
 # consumer cards are roughly 400-900 MiB; we take the cautious end so a plan does
 # not crash with out-of-memory on first load.
 GPU_RESERVE_BYTES = 900 * MIB
+# Vulkan drivers (RADV on AMD) and the ROCm/HIP runtime keep a little more for
+# themselves and their compute buffers than CUDA does, so plan a bit more cautiously.
+GPU_RESERVE_BY_BACKEND = {
+    GpuBackend.CUDA: GPU_RESERVE_BYTES,
+    GpuBackend.VULKAN: 1200 * MIB,
+    GpuBackend.ROCM: 1100 * MIB,
+    GpuBackend.CPU: 0,
+}
 
 # Below this, chat becomes impractical, so we stop shrinking context and move
 # whole layers off the GPU instead.
@@ -57,17 +70,33 @@ def plan_offload(
         raise ValueError(f"requested_context must be positive, got {requested_context}")
 
     context = min(requested_context, model.context_length or requested_context)
-    gpu_budget = hardware.gpu_free_bytes - GPU_RESERVE_BYTES if hardware.has_gpu else 0
+    gpu_budget = hardware.gpu_free_bytes - gpu_reserve_bytes(hardware) if hardware.has_gpu else 0
 
     if gpu_budget <= 0:
-        plan = _cpu_only(model, context, kv_cache_type)
+        plan = _cpu_only(model, context, kv_cache_type, note=_no_gpu_note(hardware))
     else:
         plan = (
             _try_full_gpu(model, gpu_budget, context, kv_cache_type)
             or _try_moe_split(model, gpu_budget, context, kv_cache_type)
             or _partial_layers(model, gpu_budget, context, kv_cache_type)
         )
+        if plan.strategy is not OffloadStrategy.CPU_ONLY and hardware.gpu_device:
+            plan = replace(plan, device=hardware.gpu_device)
     return _with_ram_check(plan, hardware)
+
+
+def gpu_reserve_bytes(hardware: HardwareProfile) -> int:
+    """GPU memory the backend keeps for itself, which a plan must leave free."""
+    return GPU_RESERVE_BY_BACKEND[hardware.gpu_backend] if hardware.has_gpu else 0
+
+
+def _no_gpu_note(hardware: HardwareProfile) -> str:
+    if hardware.has_gpu_hardware and hardware.gpu_backend is GpuBackend.CPU:
+        return (
+            f"{hardware.gpu_name} is not used: this llama-server has no GPU support "
+            "(install a Vulkan build, see README)."
+        )
+    return "No usable GPU memory found."
 
 
 def kv_cache_bytes(model: ModelProfile, context: int, kv_cache_type: KvCacheType) -> int:

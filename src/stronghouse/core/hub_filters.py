@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from stronghouse.core.models import HardwareProfile
-from stronghouse.core.offload_planner import GPU_RESERVE_BYTES
+from stronghouse.core.offload_planner import gpu_reserve_bytes
 
 GIB = 1024**3
 BILLION = 1_000_000_000
@@ -166,15 +166,25 @@ def file_fit(size_bytes: int, hardware: HardwareProfile) -> FileFit:
 
     The offload planner gives the exact answer once the file is on disk.
     """
-    gpu_budget = 0
-    if hardware.has_gpu:
-        gpu_budget = max(0, hardware.gpu_total_bytes - GPU_RESERVE_BYTES - CONTEXT_ALLOWANCE_BYTES)
-    if hardware.has_gpu and size_bytes <= gpu_budget:
+    gpu_limit, in_memory_limit = fit_limits(hardware)
+    if hardware.has_gpu and size_bytes <= gpu_limit:
         return FileFit.GPU
-    ram_budget = max(0, hardware.ram_total_bytes - SYSTEM_RAM_ALLOWANCE_BYTES)
-    if size_bytes <= gpu_budget + ram_budget:
+    if size_bytes <= in_memory_limit:
         return FileFit.OFFLOAD
     return FileFit.TOO_BIG
+
+
+def fit_limits(hardware: HardwareProfile) -> tuple[int, int]:
+    """Biggest model file that runs (fully on the GPU, from GPU memory plus RAM).
+
+    Uses total memory, not free, so the answer does not change with what is open.
+    """
+    gpu_limit = 0
+    if hardware.has_gpu:
+        reserve = gpu_reserve_bytes(hardware) + CONTEXT_ALLOWANCE_BYTES
+        gpu_limit = max(0, hardware.gpu_total_bytes - reserve)
+    ram_limit = max(0, hardware.ram_total_bytes - SYSTEM_RAM_ALLOWANCE_BYTES)
+    return gpu_limit, gpu_limit + ram_limit
 
 
 _SPLIT_PART = re.compile(r"^(?P<prefix>.+)-(?P<index>\d{5})-of-(?P<count>\d{5})\.gguf$")

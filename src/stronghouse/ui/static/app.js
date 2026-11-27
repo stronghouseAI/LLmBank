@@ -895,11 +895,20 @@ async function loadSystem() {
   $("#system-view").innerHTML = loadingState("Checking this computer…");
   const [hw, engine] = await Promise.all([withErrors(() => api("/hardware")), api("/engine").catch(() => null)]);
   if (!hw) { $("#system-view").innerHTML = emptyState("Could not read the hardware."); return; }
+  const machine = hw.machine || {};
+  const backendNames = { cuda: "CUDA", vulkan: "Vulkan", rocm: "ROCm", cpu: "CPU only" };
   $("#system-view").innerHTML = [
     hw.gpu_name
       ? statCard("GPU memory", `${formatBytes(hw.gpu_free_bytes)} free`,
         `${hw.gpu_name} · ${formatBytes(hw.gpu_total_bytes)} total`, usedShare(hw.gpu_free_bytes, hw.gpu_total_bytes))
-      : statCard("GPU", "Not detected", "No NVIDIA GPU found (is nvidia-smi working?). Plans use the CPU only."),
+      : statCard("GPU", "Not detected",
+        "No NVIDIA or AMD GPU found (nvidia-smi, or the amdgpu driver). Plans use the CPU only."),
+    statCard("GPU backend", backendNames[machine.backend] || "Unknown",
+      (machine.warnings || []).join(" ")
+        || "How llama-server talks to the GPU. Set STRONGHOUSE_GPU_BACKEND to change it."),
+    statCard("Model size limits", `${formatBytes(machine.in_memory_limit_bytes || 0)} in memory`,
+      `Up to ${formatBytes(machine.gpu_limit_bytes || 0)} runs fully on the GPU. Bigger than `
+        + `${formatBytes(machine.in_memory_limit_bytes || 0)} streams from disk: slow, but it runs.`),
     statCard("System memory", `${formatBytes(hw.ram_available_bytes)} free`,
       `${formatBytes(hw.ram_total_bytes)} total`, usedShare(hw.ram_available_bytes, hw.ram_total_bytes)),
     statCard("CPU", `${hw.cpu_threads} threads`, "Used for experts and layers kept in RAM"),

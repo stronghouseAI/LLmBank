@@ -598,6 +598,16 @@ def system(api: ApiClient, _args: argparse.Namespace) -> None:
         f" of {format_bytes(hw['ram_total_bytes'])}"
     )
     print(f"CPU:    {hw['cpu_threads']} threads")
+    machine = hw.get("machine")
+    if machine:
+        print(f"Setup:  {machine['summary']}")
+        print(
+            f"Limits: up to {format_bytes(machine['gpu_limit_bytes'])} fully on the GPU,"
+            f" up to {format_bytes(machine['in_memory_limit_bytes'])} in memory,"
+            " bigger streams from disk"
+        )
+        for warning in machine["warnings"]:
+            print(f"Note:   {warning}")
 
 
 # ---------- helpers ----------
