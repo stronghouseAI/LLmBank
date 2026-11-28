@@ -46,13 +46,21 @@ Two separate facts decide what a plan can do:
    of known cards (RTX 4060 Laptop 180 GB/s, RX 9060 XT 250 GB/s effective), else
    180 GB/s. The `STRONGHOUSE_*_GBPS` settings now override instead of being the
    only source. Shown on the System page, `shai status` and `/api/hardware`.
-6. **Vault on several drives.** `scan_archive` now follows symlinked folders (Python
+6. **The vault's drive.** `services/disk_probe.py` follows the archive folder
+   (and any symlink to it) to its block device in sysfs, through partitions and
+   LUKS/LVM layers, and calls it NVMe, SATA SSD or hard disk (`queue/rotational`).
+   The streaming speed in the forecast comes from that: 2, 0.45 or 0.1 GB/s, and
+   a hard disk gets a warning. phil's desktop keeps everything on a SATA drive at
+   `/mnt/shai`, where the old fixed 2 GB/s made big-model forecasts about four
+   times too hopeful.
+7. **Vault on several drives.** `scan_archive` now follows symlinked folders (Python
    3.13's `rglob` does not), visiting each real folder once, so models kept on extra
    SATA SSDs can be linked into the archive.
 
 ## Consequences
 
-- The CUDA path is unchanged: same probe, same reserve, same flags, same speeds.
+- The CUDA path is unchanged: same probe, same reserve, same flags, and the same
+  speeds for a vault on NVMe.
 - On the desktop a 30B-A3B MoE keeps many more expert blocks on the GPU than on the
   laptop, and models up to about 44 GB run from memory; bigger ones stream from disk.
 - Reserves for Vulkan and ROCm are cautious estimates; the speed test and the

@@ -85,87 +85,106 @@ NVIDIA cards are found with `nvidia-smi`. Without a GPU, StronghouseAI plans for
 
 ## Install (Pop!_OS 24.04, AMD desktop)
 
-For an AMD Radeon card such as the RX 9060 XT. llama.cpp talks to it through
-**Vulkan**, which uses the Mesa driver Pop!_OS already ships, so there is no AMD
-driver to install. Use `git clone` rather than the GitHub ZIP, so `git pull`
-updates it later.
+This is the setup of phil's desktop: Radeon RX 9060 XT (16 GB), Ryzen 9 3900XT,
+32 GB DDR4, Pop!_OS 24.04 with COSMIC, and a 1 TB SATA data drive mounted at
+`/mnt/shai` that holds the code, llama.cpp and the vault. Change `/mnt/shai` to
+your own drive. Use `git clone` rather than the GitHub ZIP, so `git pull` updates it.
 
-**1. Check the card is ready.** RDNA4 cards (RX 9060 / 9070) need Linux 6.14 or
-newer and Mesa 25.0 or newer; update Pop!_OS first if `vulkaninfo` does not list it.
+llama.cpp talks to AMD cards through **Vulkan**, which uses the Mesa driver
+Pop!_OS already ships, so no AMD driver is needed. ROCm is optional (step 5).
+
+**1. Mount the data drive at boot.** In the **Disks** app pick the drive, then
+*Edit Mount Options*: turn off *User Session Defaults*, tick *Mount at system
+startup*, mount point `/mnt/shai`. Then make it yours: `sudo chown "$USER": /mnt/shai`.
+Everything below lives on it, so it must be mounted before the app starts.
+
+**2. Check the card.** RDNA4 cards (RX 9060 / 9070) need Linux 6.14+ and Mesa 25.0+.
 
 ```bash
 sudo apt update && sudo apt full-upgrade
 sudo apt install vulkan-tools
-vulkaninfo --summary | grep deviceName   # should show "AMD Radeon RX 9060 XT (RADV GFX1200)"
+vulkaninfo --summary | grep deviceName   # "AMD Radeon RX 9060 XT (RADV GFX1200)"
 ```
 
-**2. Build llama.cpp with Vulkan** (about 5 minutes on a 12-core CPU):
+**3. Build llama.cpp with Vulkan** (about 5 minutes on the 3900XT):
 
 ```bash
 sudo apt install git curl build-essential cmake libvulkan-dev glslc spirv-headers libcurl4-openssl-dev
-git clone https://github.com/ggml-org/llama.cpp ~/src/llama.cpp
-cd ~/src/llama.cpp
+git clone https://github.com/ggml-org/llama.cpp /mnt/shai/llama.cpp
+cd /mnt/shai/llama.cpp
 cmake -B build -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release -j "$(nproc)"
-./build/bin/llama-server --list-devices  # should show "Vulkan0: AMD Radeon RX 9060 XT ..."
+./build/bin/llama-server --list-devices  # "Vulkan0: AMD Radeon RX 9060 XT (RADV GFX1200) (16304 MiB, ...)"
 ```
 
-To update it later: `cd ~/src/llama.cpp && git pull && cmake --build build --config Release -j "$(nproc)"`.
-(llama.cpp's GitHub releases also have a ready-made `ubuntu-vulkan-x64` zip if you
-would rather not build; point `STRONGHOUSE_LLAMA_SERVER` at the `llama-server` inside it.)
+To update it later: `cd /mnt/shai/llama.cpp && git pull && cmake --build build --config Release -j "$(nproc)"`.
 
-**3. Install uv and StronghouseAI:**
+**4. Install uv and StronghouseAI, with the vault on the data drive:**
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh     # then open a new terminal
-git clone https://github.com/stronghouseAI/LLmBank.git ~/LLmBank && cd ~/LLmBank
-uv sync
-echo 'export STRONGHOUSE_LLAMA_SERVER="$HOME/src/llama.cpp/build/bin/llama-server"' >> ~/.bashrc
+curl -LsSf https://astral.sh/uv/install.sh | sh          # then open a new terminal
+git clone https://github.com/stronghouseAI/LLmBank.git /mnt/shai/LLmBank
+cd /mnt/shai/LLmBank && uv sync
+
+# Keep the app's data (vault, library index, logs, jobs) on the data drive.
+# If ~/.local/share/stronghouse already exists, move it first: mv it to /mnt/shai/stronghouse.
+mkdir -p /mnt/shai/stronghouse
+ln -s /mnt/shai/stronghouse ~/.local/share/stronghouse
+
+echo 'export STRONGHOUSE_LLAMA_SERVER=/mnt/shai/llama.cpp/build/bin/llama-server' >> ~/.bashrc
 source ~/.bashrc
-uv run stronghouse             # opens http://127.0.0.1:8765 in your browser
+uv run stronghouse                                       # opens http://127.0.0.1:8765
 ```
 
-The **System** page should now say *GPU backend: Vulkan* and show the model size
-limits for this machine (with 16 GB VRAM and 32 GB RAM: about 14 GB fully on the
-GPU, about 44 GB from GPU + RAM, bigger models stream from disk).
-`uv run shai status` shows the same in the terminal.
+Optional: `uv tool install --editable .` puts `shai` on your PATH everywhere.
 
-**ROCm instead of Vulkan (optional).** Vulkan is the easy default and is usually
-as fast for generating text. ROCm can be faster at reading long prompts. RDNA4
-needs ROCm 6.4.1 or newer (see AMD's install guide for Ubuntu 24.04). Then:
+The **System** page should now show:
+
+- **GPU backend: Vulkan**, AMD Radeon RX 9060 XT
+- **Vault drive: SATA SSD** (found by itself; the app follows the symlink)
+- **Model size limits:** about 14 GB fully on the GPU, about 44 GB from GPU + RAM.
+  Bigger models still run, streaming from the SATA drive at about 0.45 GB/s, so
+  queue them as jobs and walk away.
+
+`shai status` shows the same in the terminal. These numbers are worked out from
+the hardware each time, so nothing needs setting by hand.
+
+**5. ROCm instead of Vulkan (optional).** Vulkan is the easy default and is usually
+as fast for generating text; ROCm can be faster at reading long prompts. RDNA4
+needs ROCm 6.4.1 or newer; ROCm 7.2 in `/opt/rocm` works. Build a second copy
+next to the Vulkan one:
 
 ```bash
-cd ~/src/llama.cpp
+sudo usermod -aG render,video "$USER"      # once, then log out and in
+export PATH=/opt/rocm/bin:$PATH
+cd /mnt/shai/llama.cpp
 HIPCXX="$(hipconfig -l)/clang" HIP_PATH="$(hipconfig -R)" \
   cmake -B build-rocm -DGGML_HIP=ON -DAMDGPU_TARGETS=gfx1200 -DCMAKE_BUILD_TYPE=Release
 cmake --build build-rocm --config Release -j "$(nproc)"
+./build-rocm/bin/llama-server --list-devices   # "ROCm0: AMD Radeon RX 9060 XT ..."
 ```
 
-and point `STRONGHOUSE_LLAMA_SERVER` at `build-rocm/bin/llama-server`. The app
-notices the ROCm build by itself.
+To try it, start the app with
+`STRONGHOUSE_LLAMA_SERVER=/mnt/shai/llama.cpp/build-rocm/bin/llama-server uv run stronghouse`.
+The app sees the ROCm build by itself. Run the speed test on the Run page with each
+build and keep whichever is faster in `~/.bashrc`.
 
-### Keeping models on extra SSDs
+### Keeping models on more drives
 
-Mount each drive somewhere permanent first (the **Disks** app, *Edit Mount
-Options*, or a line in `/etc/fstab`), for example `/mnt/ssd1` and `/mnt/ssd2`.
-Then either:
+The vault is one folder (`<data dir>/archive`, here `/mnt/shai/stronghouse/archive`),
+and new downloads always go there. Models on other drives can join it:
 
-- **Put the whole vault on one drive.** New downloads go there too:
-  `echo 'export STRONGHOUSE_ARCHIVE_DIR=/mnt/ssd1/models' >> ~/.bashrc`
-- **Use several drives at once.** Keep the vault where it is and link
-  `<owner>` folders from the other drives into it, then press **Rescan** (or
-  `shai vault rescan`):
+- **Move the whole vault** to another drive: `export STRONGHOUSE_ARCHIVE_DIR=/mnt/ssd2/models`.
+- **Link folders in** from other drives, then press **Rescan** (or `shai vault rescan`):
 
   ```bash
-  mkdir -p /mnt/ssd2/models/unsloth
-  ln -s /mnt/ssd2/models/unsloth ~/.local/share/stronghouse/archive/unsloth
+  ln -s /mnt/ssd2/models/unsloth /mnt/shai/stronghouse/archive/unsloth
   ```
 
-  New downloads still go to the vault folder; move finished ones across and rescan.
-
-SATA SSDs read at about 0.5 GB/s, so a model that streams from one is slower than
-from NVMe. Tell the speed forecast with `export STRONGHOUSE_DISK_GBPS=0.5`, and keep
-the models you stream most on the fastest drive. The app never deletes model files.
+Linked folders are followed. Keep the models you stream most on the fastest drive:
+NVMe reads about four times faster than SATA. The speed forecast uses the vault
+drive's kind; set `STRONGHOUSE_DISK_GBPS` if you measured your own. The app never
+deletes model files.
 
 ## Configuration
 
@@ -179,7 +198,7 @@ All settings are environment variables (defined in one place, `src/stronghouse/c
 | `STRONGHOUSE_PORT` / `STRONGHOUSE_ENGINE_PORT` | `8765` / `8766` | App and engine ports. |
 | `STRONGHOUSE_EXTRA_ARGS` | unset | llama-server flags added to every launch, e.g. `-b 4096 -ub 1024`. |
 | `STRONGHOUSE_GPU_BACKEND` | `auto` | `cuda`, `vulkan`, `rocm` or `cpu`. `auto` asks llama-server which one it was built with. |
-| `STRONGHOUSE_GPU_GBPS` / `_RAM_GBPS` / `_DISK_GBPS` | picked per machine | Memory speeds used for speed estimates (otherwise about 180-250 / 40 / 2 GB/s depending on the GPU). Raise `DISK_GBPS` for a fast NVMe, lower it for a SATA SSD. |
+| `STRONGHOUSE_GPU_GBPS` / `_RAM_GBPS` / `_DISK_GBPS` | picked per machine | Memory speeds for speed estimates. Unset, the GPU speed comes from the card (180 GB/s RTX 4060 Laptop, 250 GB/s RX 9060 XT), RAM is 40 GB/s, and the disk speed from the vault's drive (2 NVMe, 0.45 SATA SSD, 0.1 hard disk). |
 | `STRONGHOUSE_JOBS_DIR` | `<data dir>/jobs` | Where job answers are saved. |
 | `STRONGHOUSE_NOTIFY` | `1` | Set to `0` to turn off desktop notifications for jobs. |
 | `HF_TOKEN` | unset | Hugging Face token for gated models. Never logged. |
