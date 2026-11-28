@@ -198,10 +198,11 @@ def system_facts(
     """A few lines about this computer and the engine, so a pasted log has its context."""
     facts: list[str] = []
     if hardware is not None:
-        gpu = "no NVIDIA GPU detected"
-        if hardware.has_gpu:
+        gpu = "no GPU detected"
+        if hardware.has_gpu_hardware:
             vram, free = _gb(hardware.gpu_total_bytes), _gb(hardware.gpu_free_bytes)
-            gpu = f"{hardware.gpu_name}, {vram} VRAM ({free} free)"
+            backend = hardware.gpu_backend.value if hardware.has_gpu else "not used (CPU build)"
+            gpu = f"{hardware.gpu_name}, {vram} VRAM ({free} free), backend {backend}"
         facts += [
             f"GPU: {gpu}",
             f"RAM: {_gb(hardware.ram_total_bytes)} ({_gb(hardware.ram_available_bytes)} free)",

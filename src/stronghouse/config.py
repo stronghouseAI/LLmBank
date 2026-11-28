@@ -12,29 +12,20 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from stronghouse.core.models import MemorySpeeds
+from stronghouse.core.models import GpuBackend, MemorySpeedOverrides
 
 ENV_PREFIX = "STRONGHOUSE_"
 _DEFAULT_DATA_DIR = Path.home() / ".local" / "share" / "stronghouse"
 GB = 1_000_000_000
-# Effective read speeds for speed estimates, in GB/s. Defaults suit a gaming laptop
-# (RTX 4060 Laptop, dual-channel DDR5, PCIe 4 NVMe); override to match yours.
-_DEFAULT_GPU_GBPS = "180"
-_DEFAULT_RAM_GBPS = "40"
-_DEFAULT_DISK_GBPS = "2"
+# Read speeds for speed estimates (STRONGHOUSE_GPU_GBPS / _RAM_GBPS / _DISK_GBPS) are
+# optional; unset, core/machine_profile.py picks them for the detected hardware.
+# STRONGHOUSE_GPU_BACKEND: "auto" asks llama-server which backend it was built with.
+_AUTO = "auto"
 # app.log is rotated at this size, keeping this many old files (app.log.1, app.log.2).
 LOG_FILE_MAX_BYTES = 5_000_000
 LOG_FILE_BACKUPS = 2
 # The Logs page reads at most this much from the end of a log file.
 LOG_READ_MAX_BYTES = 2_000_000
-
-
-def _default_speeds() -> MemorySpeeds:
-    return MemorySpeeds(
-        gpu_bytes_per_second=float(_DEFAULT_GPU_GBPS) * GB,
-        ram_bytes_per_second=float(_DEFAULT_RAM_GBPS) * GB,
-        disk_bytes_per_second=float(_DEFAULT_DISK_GBPS) * GB,
-    )
 
 
 @dataclass(frozen=True)
@@ -51,7 +42,10 @@ class Settings:
     huggingface_token: str | None
     # llama-server flags added to every launch, e.g. "-b 4096 -ub 1024" (STRONGHOUSE_EXTRA_ARGS).
     extra_args: str = ""
-    memory_speeds: MemorySpeeds = field(default_factory=_default_speeds)
+    # Read speeds the person set; unset ones are picked per machine (core/machine_profile.py).
+    speed_overrides: MemorySpeedOverrides = field(default_factory=MemorySpeedOverrides)
+    # cuda, vulkan, rocm or cpu (STRONGHOUSE_GPU_BACKEND); None asks llama-server.
+    gpu_backend: GpuBackend | None = None
     # Finished background jobs are written here as Markdown files.
     jobs_dir: Path | None = None
     # Show a desktop notification (notify-send) when a background job finishes.
@@ -123,11 +117,12 @@ def load_settings(environ: dict[str, str] | None = None) -> Settings:
         huggingface_url=_get("HF_URL", "https://huggingface.co").rstrip("/"),
         huggingface_token=env.get("HF_TOKEN") or None,
         extra_args=_get("EXTRA_ARGS", ""),
-        memory_speeds=MemorySpeeds(
-            gpu_bytes_per_second=_parse_speed(_get("GPU_GBPS", _DEFAULT_GPU_GBPS), "GPU_GBPS"),
-            ram_bytes_per_second=_parse_speed(_get("RAM_GBPS", _DEFAULT_RAM_GBPS), "RAM_GBPS"),
-            disk_bytes_per_second=_parse_speed(_get("DISK_GBPS", _DEFAULT_DISK_GBPS), "DISK_GBPS"),
+        speed_overrides=MemorySpeedOverrides(
+            gpu_bytes_per_second=_parse_speed(_get("GPU_GBPS", ""), "GPU_GBPS"),
+            ram_bytes_per_second=_parse_speed(_get("RAM_GBPS", ""), "RAM_GBPS"),
+            disk_bytes_per_second=_parse_speed(_get("DISK_GBPS", ""), "DISK_GBPS"),
         ),
+        gpu_backend=_parse_backend(_get("GPU_BACKEND", _AUTO)),
         jobs_dir=Path(env[ENV_PREFIX + "JOBS_DIR"]).expanduser()
         if env.get(ENV_PREFIX + "JOBS_DIR")
         else None,
@@ -135,7 +130,21 @@ def load_settings(environ: dict[str, str] | None = None) -> Settings:
     )
 
 
-def _parse_speed(raw: str, name: str) -> float:
+def _parse_backend(raw: str) -> GpuBackend | None:
+    value = raw.strip().lower()
+    if value in ("", _AUTO):
+        return None
+    try:
+        return GpuBackend(value)
+    except ValueError as error:
+        choices = ", ".join([_AUTO, *(backend.value for backend in GpuBackend)])
+        message = f"{ENV_PREFIX}GPU_BACKEND must be one of {choices}, got {raw!r}"
+        raise ValueError(message) from error
+
+
+def _parse_speed(raw: str, name: str) -> float | None:
+    if not raw.strip():
+        return None
     try:
         speed = float(raw)
     except ValueError as error:

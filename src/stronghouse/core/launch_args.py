@@ -63,6 +63,9 @@ def build_server_args(
         # Use the chat template stored in the model file.
         "--jinja",
     ]  # fmt: skip
+    if plan.device:
+        # Pin the chosen GPU, or llama.cpp may also split layers onto an integrated GPU.
+        args += ["--device", plan.device]
     if plan.n_cpu_moe > 0:
         args += ["--n-cpu-moe", str(plan.n_cpu_moe)]
     if plan.kv_cache_type is not KvCacheType.F16:

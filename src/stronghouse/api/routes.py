@@ -119,7 +119,9 @@ class TranscriptRequest(BaseModel):
 
 @router.get("/hardware")
 def get_hardware(request: Request) -> dict:
-    return asdict(request.app.state.services.probe_hardware())
+    services = request.app.state.services
+    hardware = services.probe_hardware()
+    return {**asdict(hardware), "machine": asdict(services.machine(hardware))}
 
 
 @router.get("/library")
@@ -163,7 +165,8 @@ def make_plan(entry_id: int, body: PlanRequest, request: Request) -> dict:
     if services.engine.status().state is not EngineState.STOPPED:
         plan = replace(plan, notes=[*plan.notes, LOADED_MODEL_NOTE])
     command = services.engine_command_preview(Path(entry.path), plan)
-    outlook = forecast(profile, plan, hardware, entry.filename, services.settings.memory_speeds)
+    speeds = services.memory_speeds(hardware)
+    outlook = forecast(profile, plan, hardware, entry.filename, speeds)
     return {"plan": asdict(plan), "command": command, "forecast": asdict(outlook)}
 
 
@@ -174,9 +177,8 @@ def start_engine(body: StartRequest, request: Request) -> dict:
     profile = _load_profile(request, body.model_id)
     services.engine.stop()  # free its GPU memory first, or the plan sees a full GPU
     plan = _plan_for(request, profile, body)
-    outlook = forecast(
-        profile, plan, services.probe_hardware(), entry.filename, services.settings.memory_speeds
-    )
+    hardware = services.probe_hardware()
+    outlook = forecast(profile, plan, hardware, entry.filename, services.memory_speeds(hardware))
     try:
         started = services.engine.start(Path(entry.path), plan)
     except EngineError as error:

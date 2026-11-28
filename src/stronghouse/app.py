@@ -24,7 +24,8 @@ from stronghouse.api.routes import router
 from stronghouse.config import Settings
 from stronghouse.core.jobs import Job
 from stronghouse.core.launch_args import ExtraArgsError, build_server_args
-from stronghouse.core.models import HardwareProfile, LaunchPlan
+from stronghouse.core.machine_profile import machine_profile
+from stronghouse.core.models import HardwareProfile, LaunchPlan, MachineProfile, MemorySpeeds
 from stronghouse.core.run_setup import plan_with_settings
 from stronghouse.services.download_manager import DownloadManager
 from stronghouse.services.engine import EngineController
@@ -54,6 +55,14 @@ class Services:
     # Runs skills for agents and the Chat page's internet access; each use is approved first.
     skills: SkillExecutor
     jobs: JobRunner | None = None
+
+    def machine(self, hardware: HardwareProfile) -> MachineProfile:
+        """Backend, model size limits and memory speeds for this machine."""
+        return machine_profile(hardware, self.settings.speed_overrides)
+
+    def memory_speeds(self, hardware: HardwareProfile) -> MemorySpeeds:
+        """Speeds for the forecast: the person's settings, else a guess for this hardware."""
+        return self.machine(hardware).memory_speeds
 
     def engine_command_preview(self, model_path: Path, plan: LaunchPlan) -> list[str]:
         """The exact llama-server command a plan would run, for display and copy-paste."""
@@ -113,7 +122,11 @@ def build_services(settings: Settings) -> Services:
         hub=hub,
         downloads=downloads,
         engine=engine,
-        probe_hardware=probe_hardware,
+        probe_hardware=lambda: probe_hardware(
+            list_engine_devices=engine.list_devices,
+            forced_backend=settings.gpu_backend,
+            archive_dir=settings.archive_dir,
+        ),
         settings=settings,
         agents=agents,
         quests=quests,

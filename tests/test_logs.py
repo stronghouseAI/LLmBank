@@ -122,14 +122,14 @@ def test_report_has_facts_and_every_section():
     facts = system_facts(hardware, "ready", "glm.gguf", "version: 6000")
     text = report_text("0.1.0", facts, ["### A", "### B"])
     assert "## StronghouseAI 0.1.0 logs" in text
-    assert "- GPU: RTX 4060 Laptop, 8.0 GB VRAM (7.0 GB free)" in text
+    assert "- GPU: RTX 4060 Laptop, 8.0 GB VRAM (7.0 GB free), backend cuda" in text
     assert "- Engine state: ready, model glm.gguf" in text
     assert "### A\n\n### B" in text
 
 
 def test_facts_without_gpu_or_engine():
     facts = system_facts(HardwareProfile(None, 0, 0, 1, 1, 4), "stopped", None, None)
-    assert "GPU: no NVIDIA GPU detected" in facts
+    assert "GPU: no GPU detected" in facts
     assert "Engine: llama-server not found" in facts
 
 

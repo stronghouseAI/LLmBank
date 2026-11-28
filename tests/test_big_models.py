@@ -215,7 +215,7 @@ def test_speed_and_job_settings_from_environment():
             "STRONGHOUSE_NOTIFY": "off",
         }
     )
-    assert settings.memory_speeds.disk_bytes_per_second == 5.5 * GB
+    assert settings.speed_overrides.disk_bytes_per_second == 5.5 * GB
     assert settings.extra_args == "-b 4096"
     assert settings.notify is False
     assert settings.jobs_output_dir == Path("/data/jobs")

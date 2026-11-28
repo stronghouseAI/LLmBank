@@ -47,6 +47,55 @@ class ModelProfile:
         )
 
 
+class GpuVendor(StrEnum):
+    """Who made the graphics card."""
+
+    NVIDIA = "nvidia"
+    AMD = "amd"
+    INTEL = "intel"
+    OTHER = "other"
+    NONE = "none"
+
+
+class GpuBackend(StrEnum):
+    """How llama.cpp talks to the GPU. It depends on how llama-server was built."""
+
+    CUDA = "cuda"  # NVIDIA only
+    VULKAN = "vulkan"  # any vendor; the easy choice for AMD on Pop!_OS
+    ROCM = "rocm"  # AMD only (llama.cpp's HIP build)
+    CPU = "cpu"  # llama-server has no GPU support, or the GPU is switched off
+
+
+class DiskKind(StrEnum):
+    """The drive the vault is on. It sets the speed of models that stream from disk."""
+
+    NVME = "nvme"
+    SATA_SSD = "sata_ssd"
+    HDD = "hdd"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class GpuReading:
+    """One graphics card as the operating system reports it (nvidia-smi or sysfs)."""
+
+    vendor: GpuVendor
+    name: str | None
+    total_bytes: int
+    free_bytes: int
+
+
+@dataclass(frozen=True)
+class EngineDevice:
+    """One GPU as llama-server sees it (`llama-server --list-devices`)."""
+
+    name: str  # e.g. "Vulkan0", "CUDA0", "ROCm0"
+    description: str  # e.g. "AMD Radeon RX 9060 XT (RADV GFX1200)"
+    backend: GpuBackend
+    total_bytes: int
+    free_bytes: int
+
+
 @dataclass(frozen=True)
 class HardwareProfile:
     """Memory and compute available on this machine right now."""
@@ -57,9 +106,22 @@ class HardwareProfile:
     ram_total_bytes: int
     ram_available_bytes: int
     cpu_threads: int
+    gpu_vendor: GpuVendor = GpuVendor.NONE
+    # The backend llama-server will use for the GPU. CPU means the GPU is not used.
+    gpu_backend: GpuBackend = GpuBackend.CUDA
+    # llama-server device to pin (e.g. "Vulkan0"); set only when it sees several GPUs.
+    gpu_device: str | None = None
+    # The drive holding the vault (model files), found from the archive folder.
+    archive_disk: DiskKind = DiskKind.UNKNOWN
 
     @property
     def has_gpu(self) -> bool:
+        """True when llama-server can put weights on a GPU here."""
+        return self.has_gpu_hardware and self.gpu_backend is not GpuBackend.CPU
+
+    @property
+    def has_gpu_hardware(self) -> bool:
+        """True when a graphics card was found, whether or not llama-server can use it."""
         return self.gpu_name is not None and self.gpu_total_bytes > 0
 
 
@@ -110,6 +172,8 @@ class LaunchPlan:
     notes: list[str] = field(default_factory=list)
     memory_mode: MemoryMode = MemoryMode.IN_MEMORY
     tuning: RunTuning = field(default_factory=RunTuning)
+    # llama-server --device value; None lets llama.cpp use its only (or default) GPU.
+    device: str | None = None
 
 
 @dataclass(frozen=True)
@@ -119,6 +183,33 @@ class MemorySpeeds:
     gpu_bytes_per_second: float
     ram_bytes_per_second: float
     disk_bytes_per_second: float
+
+
+@dataclass(frozen=True)
+class MemorySpeedOverrides:
+    """Speeds the person set by hand, in bytes per second. None means "pick for this machine"."""
+
+    gpu_bytes_per_second: float | None = None
+    ram_bytes_per_second: float | None = None
+    disk_bytes_per_second: float | None = None
+
+
+@dataclass(frozen=True)
+class MachineProfile:
+    """What this computer can run, worked out from its hardware. Shown on System.
+
+    The limits are model *file* sizes: up to gpu_limit_bytes runs fully on the GPU,
+    up to in_memory_limit_bytes runs from VRAM plus RAM, and anything bigger still
+    runs by streaming the rest from disk (slowly).
+    """
+
+    summary: str
+    backend: GpuBackend
+    gpu_reserve_bytes: int
+    gpu_limit_bytes: int
+    in_memory_limit_bytes: int
+    memory_speeds: MemorySpeeds
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
