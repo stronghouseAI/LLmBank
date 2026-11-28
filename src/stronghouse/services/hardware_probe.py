@@ -12,10 +12,12 @@ import re
 import shutil
 import subprocess
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 from stronghouse.core.gpu_backend import combine_hardware, parse_engine_devices
 from stronghouse.core.models import GpuBackend, GpuReading, GpuVendor, HardwareProfile
+from stronghouse.services.disk_probe import disk_kind
 
 log = logging.getLogger(__name__)
 MIB = 1024 * 1024
@@ -44,18 +46,20 @@ def probe_hardware(
     drm_dir: Path = DRM_DIR,
     list_engine_devices: EngineDeviceLister | None = None,
     forced_backend: GpuBackend | None = None,
+    archive_dir: Path | None = None,
 ) -> HardwareProfile:
     """Return what this machine has right now. Never raises for a missing GPU.
 
     Args:
         list_engine_devices: returns `llama-server --list-devices` output, or None.
         forced_backend: STRONGHOUSE_GPU_BACKEND when set.
+        archive_dir: the vault folder, to find which kind of drive it is on.
     """
     runner = run_command or _run
     gpu = _probe_nvidia(runner) or read_amd_gpu(drm_dir)
     listing = list_engine_devices() if list_engine_devices else None
     ram_total, ram_available = read_meminfo(meminfo_path.read_text())
-    return combine_hardware(
+    hardware = combine_hardware(
         gpu,
         parse_engine_devices(listing) if listing is not None else None,
         ram_total,
@@ -63,6 +67,9 @@ def probe_hardware(
         os.cpu_count() or 1,
         forced_backend,
     )
+    if archive_dir is None:
+        return hardware
+    return replace(hardware, archive_disk=disk_kind(archive_dir))
 
 
 def parse_nvidia_smi(output: str) -> tuple[str | None, int, int]:

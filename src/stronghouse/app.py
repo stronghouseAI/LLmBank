@@ -123,7 +123,9 @@ def build_services(settings: Settings) -> Services:
         downloads=downloads,
         engine=engine,
         probe_hardware=lambda: probe_hardware(
-            list_engine_devices=engine.list_devices, forced_backend=settings.gpu_backend
+            list_engine_devices=engine.list_devices,
+            forced_backend=settings.gpu_backend,
+            archive_dir=settings.archive_dir,
         ),
         settings=settings,
         agents=agents,

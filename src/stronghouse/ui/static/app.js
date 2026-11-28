@@ -897,6 +897,7 @@ async function loadSystem() {
   if (!hw) { $("#system-view").innerHTML = emptyState("Could not read the hardware."); return; }
   const machine = hw.machine || {};
   const backendNames = { cuda: "CUDA", vulkan: "Vulkan", rocm: "ROCm", cpu: "CPU only" };
+  const diskNames = { nvme: "NVMe", sata_ssd: "SATA SSD", hdd: "Hard disk" };
   $("#system-view").innerHTML = [
     hw.gpu_name
       ? statCard("GPU memory", `${formatBytes(hw.gpu_free_bytes)} free`,
@@ -906,6 +907,10 @@ async function loadSystem() {
     statCard("GPU backend", backendNames[machine.backend] || "Unknown",
       (machine.warnings || []).join(" ")
         || "How llama-server talks to the GPU. Set STRONGHOUSE_GPU_BACKEND to change it."),
+    statCard("Vault drive", diskNames[hw.archive_disk] || "Unknown",
+      `Models bigger than ${formatBytes(machine.in_memory_limit_bytes || 0)} stream from here at about `
+        + `${((machine.memory_speeds?.disk_bytes_per_second || 0) / 1e9).toFixed(2)} GB/s. `
+        + "Set STRONGHOUSE_DISK_GBPS if you measured yours."),
     statCard("Model size limits", `${formatBytes(machine.in_memory_limit_bytes || 0)} in memory`,
       `Up to ${formatBytes(machine.gpu_limit_bytes || 0)} runs fully on the GPU. Bigger than `
         + `${formatBytes(machine.in_memory_limit_bytes || 0)} streams from disk: slow, but it runs.`),

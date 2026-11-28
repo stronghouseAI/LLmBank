@@ -66,6 +66,15 @@ class GpuBackend(StrEnum):
     CPU = "cpu"  # llama-server has no GPU support, or the GPU is switched off
 
 
+class DiskKind(StrEnum):
+    """The drive the vault is on. It sets the speed of models that stream from disk."""
+
+    NVME = "nvme"
+    SATA_SSD = "sata_ssd"
+    HDD = "hdd"
+    UNKNOWN = "unknown"
+
+
 @dataclass(frozen=True)
 class GpuReading:
     """One graphics card as the operating system reports it (nvidia-smi or sysfs)."""
@@ -102,6 +111,8 @@ class HardwareProfile:
     gpu_backend: GpuBackend = GpuBackend.CUDA
     # llama-server device to pin (e.g. "Vulkan0"); set only when it sees several GPUs.
     gpu_device: str | None = None
+    # The drive holding the vault (model files), found from the archive folder.
+    archive_disk: DiskKind = DiskKind.UNKNOWN
 
     @property
     def has_gpu(self) -> bool:

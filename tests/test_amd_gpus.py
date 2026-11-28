@@ -1,6 +1,8 @@
 """AMD GPUs (Vulkan / ROCm), backend detection and machine profiles. See ADR 0018."""
 
+import os
 import stat
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -13,6 +15,7 @@ from stronghouse.core.hub_filters import FileFit, file_fit
 from stronghouse.core.launch_args import build_server_args
 from stronghouse.core.machine_profile import machine_profile
 from stronghouse.core.models import (
+    DiskKind,
     GpuBackend,
     GpuReading,
     GpuVendor,
@@ -21,6 +24,7 @@ from stronghouse.core.models import (
     OffloadStrategy,
 )
 from stronghouse.core.offload_planner import GPU_RESERVE_BY_BACKEND, plan_offload
+from stronghouse.services.disk_probe import classify_disk, disk_kind
 from stronghouse.services.engine import EngineController
 from stronghouse.services.hardware_probe import probe_hardware, read_amd_gpu
 from tests.test_offload_planner import moe_model
@@ -307,3 +311,96 @@ def test_hardware_endpoint_includes_the_machine_profile(tmp_path: Path):
     assert body["gpu_vendor"] == "amd"
     assert body["machine"]["backend"] == "vulkan"
     assert body["machine"]["in_memory_limit_bytes"] > 41 * GIB
+
+
+# ---------- the vault's drive ----------
+
+
+def fake_block_device(tmp_path: Path, folder: Path, target: str) -> Path:
+    """sysfs where the device behind folder resolves to devices/<target>."""
+    block = tmp_path / "sys" / "dev" / "block"
+    block.mkdir(parents=True, exist_ok=True)
+    device = os.stat(folder).st_dev
+    link = block / f"{os.major(device)}:{os.minor(device)}"
+    link.symlink_to(tmp_path / "sys" / "devices" / target)
+    return block
+
+
+def make_disk(tmp_path: Path, name: str, rotational: str, partition: str | None = None) -> None:
+    disk = tmp_path / "sys" / "devices" / name
+    (disk / "queue").mkdir(parents=True)
+    (disk / "queue" / "rotational").write_text(rotational + "\n")
+    if partition:
+        (disk / partition).mkdir()
+        (disk / partition / "partition").write_text("1\n")
+
+
+@pytest.mark.parametrize(
+    ("name", "rotational", "kind"),
+    [
+        ("nvme0n1", "0", DiskKind.NVME),
+        ("sda", "0", DiskKind.SATA_SSD),
+        ("sdb", "1", DiskKind.HDD),
+        ("sdc", None, DiskKind.UNKNOWN),
+    ],
+)
+def test_classify_disk(name, rotational, kind):
+    assert classify_disk(name, rotational) is kind
+
+
+def test_vault_on_a_sata_ssd_partition(tmp_path: Path):
+    vault = tmp_path / "mnt" / "shai" / "stronghouse"
+    vault.mkdir(parents=True)
+    make_disk(tmp_path, "sda", "0", partition="sda1")
+    block = fake_block_device(tmp_path, vault, "sda/sda1")
+    assert disk_kind(vault, block) is DiskKind.SATA_SSD
+    # A vault not created yet is judged by its nearest existing parent.
+    assert disk_kind(vault / "archive" / "new", block) is DiskKind.SATA_SSD
+
+
+def test_vault_on_an_encrypted_nvme_volume(tmp_path: Path):
+    make_disk(tmp_path, "nvme0n1", "0", partition="nvme0n1p3")
+    mapped = tmp_path / "sys" / "devices" / "dm-0"
+    (mapped / "slaves").mkdir(parents=True)
+    (mapped / "slaves" / "nvme0n1p3").symlink_to(tmp_path / "sys/devices/nvme0n1/nvme0n1p3")
+    block = fake_block_device(tmp_path, tmp_path, "dm-0")
+    assert disk_kind(tmp_path, block) is DiskKind.NVME
+
+
+def test_vault_without_a_block_device(tmp_path: Path):
+    assert disk_kind(tmp_path, tmp_path / "no-sysfs") is DiskKind.UNKNOWN
+
+
+# ---------- phil's desktop, end to end ----------
+
+
+def phils_desktop() -> HardwareProfile:
+    """RX 9060 XT 16 GB (Vulkan), 32 GB DDR4, Ryzen 9 3900XT, vault on a SATA SSD."""
+    return HardwareProfile(
+        "AMD Radeon RX 9060 XT", 16304 * MIB, 15500 * MIB, 32 * GIB, 28 * GIB, 24,
+        gpu_vendor=GpuVendor.AMD, gpu_backend=GpuBackend.VULKAN,
+        archive_disk=DiskKind.SATA_SSD,
+    )  # fmt: skip
+
+
+def test_phils_desktop_profile():
+    profile = machine_profile(phils_desktop())
+    assert profile.summary == (
+        "AMD Radeon RX 9060 XT (17.1 GB) via Vulkan · 34.4 GB RAM · vault on SATA SSD"
+    )
+    assert profile.memory_speeds.gpu_bytes_per_second == 250 * GB
+    assert profile.memory_speeds.disk_bytes_per_second == 0.45 * GB
+    assert 44 * GB < profile.in_memory_limit_bytes < 45 * GB
+    assert profile.warnings == []
+
+
+def test_phils_desktop_runs_a_30b_moe_mostly_on_the_gpu():
+    plan = plan_offload(moe_model(), phils_desktop(), 8192)
+    assert plan.strategy is OffloadStrategy.MOE_SPLIT
+    assert plan.n_cpu_moe < 24  # over half the expert blocks stay on the GPU
+    assert plan.device is None
+
+
+def test_hard_disk_vault_gets_a_warning():
+    [warning] = machine_profile(replace(phils_desktop(), archive_disk=DiskKind.HDD)).warnings
+    assert "hard disk" in warning
